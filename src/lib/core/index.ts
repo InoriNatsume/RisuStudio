@@ -5,5 +5,6 @@
 
 export * from './formats';
 export * from './types';
+export * from './cbs';
 export { logger } from './logger';
 export type { LogLevel, LogCategory, LogEntry } from './logger';
