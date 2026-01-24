@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseRisum, exportRisum } from '../src/lib/core/formats/risum';
+import { parseRisum, exportRisum, buildAssetMap } from '../src/lib/core/formats/risum';
 import type { RisuModule } from '../src/lib/core/types/module';
 
 describe('Risum Parser', () => {
@@ -34,45 +34,58 @@ describe('Risum Parser', () => {
   it('should export and parse module roundtrip', () => {
     const original = createTestModule();
     const exported = exportRisum(original);
-    const parsed = parseRisum(exported);
+    const result = parseRisum(exported);
 
-    expect(parsed.name).toBe(original.name);
-    expect(parsed.description).toBe(original.description);
-    expect(parsed.lorpiority).toBe(original.lorpiority);
-    expect(parsed.lpiority).toBe(original.lpiority);
-    expect(parsed.prompt).toEqual(original.prompt);
-    expect(parsed.regex).toEqual(original.regex);
-    expect(parsed.cbs).toBe(original.cbs);
-    expect(parsed.trigger).toEqual(original.trigger);
-    expect(parsed.lorebook).toEqual(original.lorebook);
+    // parseRisum returns { module, assets, version }
+    expect(result.module.name).toBe(original.name);
+    expect(result.module.description).toBe(original.description);
+    expect(result.module.lorpiority).toBe(original.lorpiority);
+    expect(result.module.lpiority).toBe(original.lpiority);
+    expect(result.module.prompt).toEqual(original.prompt);
+    expect(result.module.regex).toEqual(original.regex);
+    expect(result.module.cbs).toBe(original.cbs);
+    expect(result.module.trigger).toEqual(original.trigger);
+    expect(result.module.lorebook).toEqual(original.lorebook);
   });
 
   it('should parse file with correct magic bytes', () => {
     const module = createTestModule();
     const exported = exportRisum(module);
     
-    // Check magic bytes (before RPack decoding, first 4 bytes of decoded should be RMD\x00)
-    // But since it's RPack encoded, we just verify it parses correctly
+    // RisuAI 포맷: 매직 넘버 0x6F (111), 버전 0x00
+    expect(exported[0]).toBe(0x6F);
+    expect(exported[1]).toBe(0x00);
+    
     expect(() => parseRisum(exported)).not.toThrow();
   });
 
   it('should handle module with assets', () => {
-    const module: RisuModule = {
-      ...createTestModule(),
-      assets: [
-        { name: 'image.png', data: new Uint8Array([1, 2, 3, 4, 5]) },
-        { name: 'audio.mp3', data: new Uint8Array([10, 20, 30]) }
-      ]
-    };
+    // 모듈에 에셋 정보 추가
+    const module = createTestModule();
+    module.assets = [
+      ['image', '', 'png'],
+      ['audio', '', 'mp3']
+    ];
+    
+    // 에셋 배열 (module.assets와 순서 매핑)
+    const assets: Uint8Array[] = [
+      new Uint8Array([1, 2, 3, 4, 5]),
+      new Uint8Array([10, 20, 30])
+    ];
 
-    const exported = exportRisum(module);
-    const parsed = parseRisum(exported);
+    const exported = exportRisum(module, assets);
+    const result = parseRisum(exported);
 
-    expect(parsed.assets?.length).toBe(2);
-    expect(parsed.assets?.[0].name).toBe('image.png');
-    expect(parsed.assets?.[0].data).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
-    expect(parsed.assets?.[1].name).toBe('audio.mp3');
-    expect(parsed.assets?.[1].data).toEqual(new Uint8Array([10, 20, 30]));
+    // 에셋은 배열로 반환됨
+    expect(result.assets.length).toBe(2);
+    expect(result.assets[0]).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
+    expect(result.assets[1]).toEqual(new Uint8Array([10, 20, 30]));
+    
+    // buildAssetMap으로 ID 맵 생성
+    const assetMap = buildAssetMap(result.module, result.assets);
+    expect(assetMap.size).toBe(2);
+    expect(assetMap.get('image.png')).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
+    expect(assetMap.get('audio.mp3')).toEqual(new Uint8Array([10, 20, 30]));
   });
 
   it('should handle empty arrays', () => {
@@ -90,16 +103,25 @@ describe('Risum Parser', () => {
     };
 
     const exported = exportRisum(module);
-    const parsed = parseRisum(exported);
+    const result = parseRisum(exported);
 
-    expect(parsed.name).toBe('Empty Module');
-    expect(parsed.prompt).toEqual([]);
-    expect(parsed.regex).toEqual([]);
-    expect(parsed.lorebook).toEqual([]);
+    expect(result.module.name).toBe('Empty Module');
+    expect(result.module.prompt).toEqual([]);
+    expect(result.module.regex).toEqual([]);
+    expect(result.module.lorebook).toEqual([]);
   });
 
   it('should throw on invalid magic bytes', () => {
     const invalidData = new Uint8Array([0, 0, 0, 0, 1, 2, 3, 4]);
     expect(() => parseRisum(invalidData)).toThrow();
+  });
+
+  it('should return version info', () => {
+    const module = createTestModule();
+    const exported = exportRisum(module);
+    const result = parseRisum(exported);
+    
+    // RisuAI 포맷 버전은 0
+    expect(result.version).toBe(0);
   });
 });

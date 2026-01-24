@@ -3,13 +3,13 @@
  * .risup / .risupreset 프리셋 파일 파싱
  * 
  * 처리 체인:
- * - risup:      file → RPack → fflate → MsgPack → AES복호화 → MsgPack → Preset
- * - risupreset: file → fflate → MsgPack → AES복호화 → MsgPack → Preset
+ * - risup:      file → RPack → fflate → MsgPack(컨테이너) → AES복호화 → MsgPack → Preset
+ * - risupreset: file → fflate → MsgPack(컨테이너) → AES복호화 → MsgPack → Preset
  * 
  * 참조: RisuAI_Format_Specification.md, risup_cherrypick.md
  */
 
-import { inflateSync, deflateSync } from 'fflate';
+import { decompressSync, compressSync } from 'fflate';
 import { unpack, pack } from 'msgpackr';
 import { rpackDecode, rpackEncode } from './rpack';
 import { decryptPreset, encryptPreset } from './crypto';
@@ -35,8 +35,18 @@ export interface RisupResult {
 }
 
 /**
+ * 프리셋 컨테이너 타입
+ */
+interface PresetContainer {
+  preset?: Uint8Array;
+  pres?: Uint8Array;  // 레거시
+  presetVersion?: number;
+  type?: string;
+}
+
+/**
  * .risup 파일 파싱
- * 체인: RPack → fflate → MsgPack → AES → MsgPack
+ * 체인: RPack → fflate → MsgPack(컨테이너) → AES → MsgPack
  * 
  * @param data risup 파일 바이트 데이터
  * @returns 파싱된 프리셋
@@ -49,19 +59,29 @@ export async function parseRisup(data: Uint8Array): Promise<RisupResult> {
     const rpackDecoded = rpackDecode(data);
     logger.debug('risup', 'RPack 디코딩 완료', { size: rpackDecoded.length });
     
-    // 2. fflate inflate (DEFLATE 압축 해제)
-    const inflated = inflateSync(rpackDecoded);
-    logger.debug('risup', 'Inflate 완료', { size: inflated.length });
+    // 2. fflate 압축 해제
+    const decompressed = decompressSync(rpackDecoded);
+    logger.debug('risup', '압축 해제 완료', { size: decompressed.length });
     
-    // 3. MsgPack 디코딩 (암호화된 데이터)
-    const encrypted = unpack(inflated) as Uint8Array;
-    logger.debug('risup', 'MsgPack 디코딩 완료 (암호화)', { size: encrypted.length });
+    // 3. MsgPack 디코딩 (컨테이너)
+    const container = unpack(decompressed) as PresetContainer;
+    logger.debug('risup', 'MsgPack 디코딩 완료 (컨테이너)', { 
+      hasPreset: !!container.preset,
+      hasPres: !!container.pres,
+      version: container.presetVersion 
+    });
     
-    // 4. AES-GCM 복호화
+    // 4. 암호화된 데이터 추출
+    const encrypted = container.preset || container.pres;
+    if (!encrypted) {
+      throw new Error('No encrypted preset data found in container');
+    }
+    
+    // 5. AES-GCM 복호화
     const decrypted = await decryptPreset(encrypted);
     logger.debug('risup', 'AES 복호화 완료', { size: decrypted.length });
     
-    // 5. MsgPack 디코딩 (프리셋 데이터)
+    // 6. MsgPack 디코딩 (프리셋 데이터)
     const preset = unpack(decrypted) as RisuPreset;
     
     logger.info('risup', '파싱 완료', { name: preset.name });
@@ -75,7 +95,7 @@ export async function parseRisup(data: Uint8Array): Promise<RisupResult> {
 
 /**
  * .risupreset 파일 파싱 (레거시, RPack 없음)
- * 체인: fflate → MsgPack → AES → MsgPack
+ * 체인: fflate → MsgPack(컨테이너) → AES → MsgPack
  * 
  * @param data risupreset 파일 바이트 데이터
  * @returns 파싱된 프리셋
@@ -84,19 +104,29 @@ export async function parseRisupreset(data: Uint8Array): Promise<RisupResult> {
   logger.debug('risup', '파싱 시작 (.risupreset)', { size: data.length });
   
   try {
-    // 1. fflate inflate (DEFLATE 압축 해제)
-    const inflated = inflateSync(data);
-    logger.debug('risup', 'Inflate 완료', { size: inflated.length });
+    // 1. fflate 압축 해제
+    const decompressed = decompressSync(data);
+    logger.debug('risup', '압축 해제 완료', { size: decompressed.length });
     
-    // 2. MsgPack 디코딩 (암호화된 데이터)
-    const encrypted = unpack(inflated) as Uint8Array;
-    logger.debug('risup', 'MsgPack 디코딩 완료 (암호화)', { size: encrypted.length });
+    // 2. MsgPack 디코딩 (컨테이너)
+    const container = unpack(decompressed) as PresetContainer;
+    logger.debug('risup', 'MsgPack 디코딩 완료 (컨테이너)', { 
+      hasPreset: !!container.preset,
+      hasPres: !!container.pres,
+      version: container.presetVersion 
+    });
     
-    // 3. AES-GCM 복호화
+    // 3. 암호화된 데이터 추출
+    const encrypted = container.preset || container.pres;
+    if (!encrypted) {
+      throw new Error('No encrypted preset data found in container');
+    }
+    
+    // 4. AES-GCM 복호화
     const decrypted = await decryptPreset(encrypted);
     logger.debug('risup', 'AES 복호화 완료', { size: decrypted.length });
     
-    // 4. MsgPack 디코딩 (프리셋 데이터)
+    // 5. MsgPack 디코딩 (프리셋 데이터)
     const preset = unpack(decrypted) as RisuPreset;
     
     logger.info('risup', '파싱 완료', { name: preset.name });
@@ -110,7 +140,7 @@ export async function parseRisupreset(data: Uint8Array): Promise<RisupResult> {
 
 /**
  * .risup 파일 생성
- * 체인: Preset → MsgPack → AES → MsgPack → fflate → RPack
+ * 체인: Preset → MsgPack → AES → 컨테이너 → MsgPack → fflate → RPack
  * 
  * @param preset 프리셋 데이터
  * @returns risup 파일 바이트 데이터
@@ -125,14 +155,19 @@ export async function exportRisup(preset: RisuPreset): Promise<Uint8Array> {
     // 2. AES-GCM 암호화
     const encrypted = await encryptPreset(presetPacked);
     
-    // 3. MsgPack 인코딩 (암호화된 데이터)
-    const encryptedPacked = pack(encrypted);
+    // 3. 컨테이너 생성 및 MsgPack 인코딩
+    const container: PresetContainer = {
+      preset: encrypted,
+      presetVersion: 2,
+      type: 'preset'  // RisuAI 원본과 동일
+    };
+    const containerPacked = pack(container);
     
-    // 4. fflate deflate (DEFLATE 압축)
-    const deflated = deflateSync(encryptedPacked);
+    // 4. fflate 압축
+    const compressed = compressSync(containerPacked);
     
     // 5. RPack 인코딩
-    const result = rpackEncode(deflated);
+    const result = rpackEncode(compressed);
     
     logger.info('risup', '내보내기 완료', { size: result.length });
     
@@ -145,7 +180,7 @@ export async function exportRisup(preset: RisuPreset): Promise<Uint8Array> {
 
 /**
  * .risupreset 파일 생성 (레거시)
- * 체인: Preset → MsgPack → AES → MsgPack → fflate
+ * 체인: Preset → MsgPack → AES → 컨테이너 → MsgPack → fflate
  * 
  * @param preset 프리셋 데이터
  * @returns risupreset 파일 바이트 데이터
@@ -160,11 +195,16 @@ export async function exportRisupreset(preset: RisuPreset): Promise<Uint8Array> 
     // 2. AES-GCM 암호화
     const encrypted = await encryptPreset(presetPacked);
     
-    // 3. MsgPack 인코딩 (암호화된 데이터)
-    const encryptedPacked = pack(encrypted);
+    // 3. 컨테이너 생성 및 MsgPack 인코딩
+    const container: PresetContainer = {
+      preset: encrypted,
+      presetVersion: 2,
+      type: 'preset'  // RisuAI 원본과 동일
+    };
+    const containerPacked = pack(container);
     
-    // 4. fflate deflate (DEFLATE 압축)
-    const result = deflateSync(encryptedPacked);
+    // 4. fflate 압축
+    const result = compressSync(containerPacked);
     
     logger.info('risup', '내보내기 완료', { size: result.length });
     

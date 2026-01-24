@@ -1,0 +1,43 @@
+{
+  "spec": "chara_card_v3",
+  "spec_version": "3.0",
+  "data": {
+    "name": "Test Character",
+    "description": "A test character for RisuStudio fixtures.",
+    "personality": "Friendly and helpful.",
+    "scenario": "Testing scenario.",
+    "first_mes": "Hello! I'm a test character.",
+    "mes_example": "<START>\n{{user}}: Hi!\n{{char}}: Hello there!",
+    "creator_notes": "Created for testing purposes.",
+    "system_prompt": "",
+    "post_history_instructions": "",
+    "tags": ["test", "fixture"],
+    "creator": "RisuStudio",
+    "character_version": "1.0.0",
+    "alternate_greetings": [
+      "Welcome to the test!",
+      "Greetings, tester!"
+    ],
+    "extensions": {
+      "risuai": {
+        "additionalAssets": [],
+        "emotionImages": [],
+        "triggerscript": [],
+        "customscript": []
+      }
+    },
+    "character_book": {
+      "name": "Test Lorebook",
+      "description": "Test lorebook entries",
+      "entries": [
+        {
+          "keys": ["test", "testing"],
+          "content": "This is a test lorebook entry.",
+          "enabled": true,
+          "insertion_order": 100
+        }
+      ]
+    },
+    "assets": []
+  }
+}

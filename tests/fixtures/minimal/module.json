@@ -1,0 +1,27 @@
+{
+  "name": "Test Module",
+  "description": "A test module for RisuStudio fixtures.",
+  "namespace": "test_module",
+  "version": "1.0.0",
+  "author": "RisuStudio",
+  "lorebook": [
+    {
+      "key": ["test"],
+      "content": "This is test module lorebook content.",
+      "activationPercent": 100,
+      "alwaysActive": false,
+      "selective": false,
+      "order": 100
+    }
+  ],
+  "regex": [
+    {
+      "in": "\\btest\\b",
+      "out": "TEST",
+      "type": "editdisplay"
+    }
+  ],
+  "triggerscript": [],
+  "cjs": "",
+  "assets": []
+}

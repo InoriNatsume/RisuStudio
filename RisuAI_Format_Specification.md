@@ -40,6 +40,7 @@
 캐릭터 카드 (.charx):
   파싱: ZIP 해제 → card.json + assets/
   익스포트: card.json + assets → ZIP 압축
+  ※ 원본 참조: src/ts/process/processzip.ts (CharXImporter, CharXWriter)
 
 캐릭터 카드 (.jpg/.jpeg - CharX-JPEG):
   파싱: JPEG 부분 분리 + ZIP 부분 → CharX 파싱
@@ -48,15 +49,25 @@
 캐릭터 카드 (.png):
   파싱: tEXt 청크 순회 → ccv3/chara → Base64 → JSON
   에셋: chara-ext-asset_{N} → Base64 → 바이너리
+  ※ 원본 참조: src/ts/pngChunk.ts
 
 모듈 (.risum):
-  파싱: 헤더 → RPack → JSON + 에셋 블록들
+  파싱: RPack → 매직넘버(0x6F 0x00) → 메인블록 + 에셋블록들
+  익스포트: JSON + 에셋 → RPack 인코딩
+  ※ 원본 참조: src/ts/process/modules.ts (exportModule, readModule)
+  ※ 별도 JSON 파일 없음 (바이너리에 직접 임베드)
 
 프리셋 (.risup):
   파싱: RPack → fflate → MsgPack → AES-GCM → MsgPack
+  익스포트: JSON → MsgPack → AES-GCM → MsgPack + 메타 → fflate → RPack
+  ※ 원본 참조: src/ts/storage/database.svelte.ts (downloadPreset, importPreset)
+  ※ 암호화 키: 'risupreset'
 
 프리셋 (.risupreset):
   파싱: fflate → MsgPack → AES-GCM → MsgPack (RPack 없음)
+  ※ 레거시 포맷
+
+⚠️ 프리셋 데이터 스키마(botPreset, promptTemplate 등)는 [docs/risup_schema.md](docs/risup_schema.md) 참조
 ```
 
 ---
@@ -845,9 +856,39 @@ async function parseRisupreset(data: Uint8Array): Promise<any> {
 }
 ```
 
+### 5.6 프리셋 데이터 스키마
+
+프리셋 내부 데이터 구조 (`botPreset`, `promptTemplate`, `FormatingOrderItem`, `RegexScript` 등)는  
+**[docs/risup_schema.md](docs/risup_schema.md)** 문서를 참조하세요.
+
+**핵심 개념:**
+- `mainPrompt`, `jailbreak`: 레거시 텍스트 필드 (구버전 호환용)
+- `promptTemplate`: 구조화된 프롬프트 배열 (최신 프리셋)
+- `formatingOrder`: 프롬프트 조합 순서
+- `regex`: 입출력 변환 정규식
+
 ---
 
 ## 6. 데이터 스키마
+
+> **📖 상세 스키마 문서**
+> 
+> - [schema_reference.md](docs/schema_reference.md) - 전체 데이터 스키마 레퍼런스
+>   - RisuModule, character, groupChat, loreBook, customscript, triggerscript, Chat, Message
+>   - risum 바이너리 구조
+>   - 에셋 처리 방식
+> 
+> - [character_format.md](docs/character_format.md) - 캐릭터 카드 포맷
+>   - CharX (.charx) ZIP 구조
+>   - PNG tEXt 청크 구조
+>   - JPEG/CharX-JPEG 구조
+>   - CCv3 호환성 및 필드 매핑
+> 
+> - [risup_schema.md](docs/risup_schema.md) - 프리셋 스키마
+>   - botPreset 50+ 필드
+>   - PromptItem 6가지 타입
+>   - FormatingOrderItem
+>   - RegexScript
 
 ### 6.1 캐릭터 카드 (CCv3)
 
@@ -1078,19 +1119,80 @@ const fileName = nameExt ? assetName : `${assetName}.${metaExt}`;
 
 ## 8. 구현 참조
 
-### 8.1 참조 코드
+### 8.1 RisuAI 원본 코드 분석 결과
+
+#### CharX 내부 구조 (processzip.ts:150-155)
+```
+CharX files are ZIP archives containing:
+- card.json: Character card data (CCv3 format)
+- module.risum: Optional module data (scripts, lorebook)
+- assets/*: Image and other asset files
+```
+
+#### 파일명 처리 (processzip.ts:371-376)
+```typescript
+if(fileName === 'card.json'){
+    this.cardData = new TextDecoder().decode(assetData)
+}
+else if(fileName === 'module.risum'){
+    this.moduleData = assetData
+}
+```
+
+#### 모듈 바이너리 구조 (modules.ts:60-75)
+```typescript
+writeByte(111)              // magic number (0x6F)
+writeByte(0)                // version
+writeLength(mainbuf.length)
+apb.append(mainbuf)         // RPack 인코딩된 JSON
+
+for(asset of assets){
+  writeByte(1)              // mark as asset
+  // 에셋 데이터...
+}
+
+writeByte(0)                // end of file
+```
+
+#### 프리셋 암호화 (database.svelte.ts:2088-2097)
+```typescript
+const buf = fflate.compressSync(encodeMsgpack({
+    presetVersion: 2,
+    type: 'preset',
+    preset: await encryptBuffer(
+        encodeMsgpack(pres),
+        'risupreset'
+    )
+}))
+const buf2 = await encodeRPack(buf)  // .risup
+```
+
+### 8.2 참조 코드 목록
 
 | 소스 | 위치 | 설명 |
 |------|------|------|
-| RisuAI | `Risuai-2026.1.184/src/ts/characterCards.ts` | 캐릭터 카드 익스포트 |
-| RisuAI | `Risuai-2026.1.184/src/ts/pngChunk.ts` | PNG tEXt 청크 처리 |
-| RisuAI | `Risuai-2026.1.184/src/ts/process/modules.ts` | 모듈 파싱/익스포트 |
-| RisuAI | `Risuai-2026.1.184/src/ts/rpack/rpack_bg.wasm` | RPack WASM |
-| RisuExtractUtil | `RisuExtractUtil-master/src/` | Node.js 추출 유틸 |
+| RisuAI | `src/ts/characterCards.ts` | 캐릭터 카드 익스포트 |
+| RisuAI | `src/ts/process/processzip.ts` | CharX 파싱/익스포트 (CharXImporter, CharXWriter) |
+| RisuAI | `src/ts/pngChunk.ts` | PNG tEXt 청크 처리 |
+| RisuAI | `src/ts/process/modules.ts` | 모듈 파싱/익스포트 (exportModule, readModule) |
+| RisuAI | `src/ts/storage/database.svelte.ts` | 프리셋 파싱/익스포트 (downloadPreset, importPreset) |
+| RisuAI | `src/ts/rpack/rpack_bg.wasm` | RPack WASM |
+| RisuExtractUtil | `src/` | Node.js 추출 유틸 |
 | ModuleManager | `module-manager-v3_2.0.6.js` | 중복 에셋 처리 |
 | AssetGod | `AssetGod_v3.js` | 확장자 분리 로직 |
 
-### 8.2 체리픽 문서
+### 8.3 Extract CLI 출력 파일명
+
+RisuStudio Extract CLI는 포맷별로 다른 JSON 파일명을 사용합니다:
+
+| 포맷 | 출력 파일명 | 비고 |
+|------|-------------|------|
+| `.charx` | `card.json` | RisuAI ZIP 내부 파일명과 동일 |
+| `.png` / `.jpg` / `.jpeg` | `card.json` | CharX와 동일한 CCv3 형식 |
+| `.risum` | `module.json` | 디코딩된 모듈 JSON |
+| `.risup` / `.risupreset` | `preset.json` | 디코딩된 프리셋 JSON |
+
+### 8.4 체리픽 문서
 
 - [charx_cherrypick.md](reference/charx_cherrypick.md) - 캐릭터 카드 상세
 - [risum_cherrypick.md](reference/risum_cherrypick.md) - 모듈 상세
@@ -1098,9 +1200,112 @@ const fileName = nameExt ? assetName : `${assetName}.${metaExt}`;
 
 ---
 
+## 9. DSL (Domain Specific Language) 에디터
+
+RisuStudio와 ModuleManager에서 사용하는 TOML 기반 DSL 에디터 형식입니다.
+
+### 9.1 DSL 형식 개요
+
+```toml
+===
+name = "항목 이름"
+type = "항목 타입"
+field = "인라인 값"
+multilineField = '''
+멀티라인
+내용
+'''
+
+===
+name = "다음 항목"
+...
+```
+
+### 9.2 구문 요소
+
+| 요소 | 형식 | 설명 |
+|------|------|------|
+| 구분자 | `===` | 각 항목의 시작 |
+| 인라인 값 | `key = "value"` | 한 줄 문자열 |
+| 멀티라인 값 | `key = '''...'''` | 여러 줄 문자열 |
+| JSON 값 | `key = '[...]'` 또는 `key = '''[...]'''` | 조건/효과 배열 |
+
+### 9.3 정규식 DSL ↔ JSON 매핑
+
+**DSL 형식:**
+```toml
+===
+name = "에셋"
+type = "editdisplay"
+pattern = "<img mps=\"(.*?)\">"
+replace = '''
+{{#if {{greater_equal::{{chat_index}}::{{? {{lastmessageid}}-5}}}}}}
+<table class="asset-table">
+  <tr>
+    <td class="image-cell in-table">
+      <img src="{{raw::$1.png}}" alt="$1.png">
+    </td>
+  </tr>
+</table>
+{{/if}}
+'''
+```
+
+**JSON 형식:**
+```json
+{
+  "comment": "에셋",
+  "type": "editdisplay",
+  "in": "<img mps=\"(.*?)\">",
+  "out": "{{#if {{greater_equal::...}}}}\n<table class=\"asset-table\">...",
+  "flag": "",
+  "ableFlag": false
+}
+```
+
+### 9.4 트리거 DSL ↔ JSON 매핑
+
+**DSL 형식:**
+```toml
+===
+name = "카운터"
+type = "output"
+active = "true"
+lowLevelAccess = "false"
+condition = '''
+[{"type":"var","var":"enabled","operator":"=","value":"1"}]
+'''
+effect = '''
+[{"type":"setvar","var":"count","value":"{{add::{{getvar::count}}::1}}","operator":"="}]
+'''
+```
+
+**JSON 형식:**
+```json
+{
+  "comment": "카운터",
+  "type": "output",
+  "conditions": [{"type":"var","var":"enabled","operator":"=","value":"1"}],
+  "effect": [{"type":"setvar","var":"count","value":"{{add::{{getvar::count}}::1}}","operator":"="}]
+}
+```
+
+### 9.5 구문 강조 규칙
+
+| 요소 | 색상 | 설명 |
+|------|------|------|
+| `===` | 빨강 (#ff7b72) | 구분자 |
+| `key` | 파랑 (#79c0ff) | 필드 이름 |
+| `"..."` | 연파랑 (#a5d6ff) | 문자열 값 |
+| `'''` | 초록 (#7ee787) | 멀티라인 따옴표 |
+| `{{...}}` | 주황 (#ffa657) | 템플릿 변수 |
+
+---
+
 ## 변경 이력
 
 | 버전 | 날짜 | 설명 |
 |------|------|------|
+| 2.1.0 | 2026-01-25 | DSL 에디터 형식 문서화 추가 |
 | 2.0.0 | 2026-01-25 | 실제 구현 테스트 완료, CharX-JPEG 추가, embeded:// URI 문서화 |
 | 1.0.0 | 2026-01-24 | 초안 작성 |

@@ -17,7 +17,7 @@ export { parseCharx, exportCharx, isCharxFile, normalizeToV3 } from './charx';
 export type { CharxResult } from './charx';
 
 // risum
-export { parseRisum, exportRisum, isRisumFile } from './risum';
+export { parseRisum, exportRisum, isRisumFile, buildAssetMap } from './risum';
 export type { RisumResult } from './risum';
 
 // risup

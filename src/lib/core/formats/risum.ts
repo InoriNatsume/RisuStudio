@@ -2,17 +2,26 @@
  * risum Parser
  * .risum 모듈 파일 파싱
  * 
- * 참조: RisuAI_Format_Specification.md, risum_cherrypick.md
+ * RisuAI 실제 바이너리 포맷:
+ * - 매직 넘버: 0x6F (111)
+ * - 버전: 0x00 (0)
+ * - 메인 블록: uint32LE(length) + RPack(JSON)
+ * - 에셋 블록: 0x01 + uint32LE(length) + RPack(data) (반복)
+ * - EOF: 0x00
+ * 
+ * 참조: RisuAI src/ts/process/modules.ts
  */
 
 import { rpackDecode, rpackEncode } from './rpack';
 import { BinaryReader, BinaryWriter } from './binary';
-import type { RisuModule, RisumFile, ModuleAsset } from '../types/module';
+import type { RisuModule } from '../types/module';
 import { logger } from '../logger';
 
-// risum 매직 넘버: "RMD\x00"
-const RISUM_MAGIC = new Uint8Array([0x52, 0x4D, 0x44, 0x00]);
-const RISUM_VERSION = 1;
+// RisuAI 실제 매직 넘버
+const RISUM_MAGIC = 0x6F;  // 111
+const RISUM_VERSION = 0x00;  // 0
+const ASSET_MARKER = 0x01;  // 에셋 블록 마커
+const EOF_MARKER = 0x00;    // EOF 마커
 
 /**
  * risum 파싱 에러
@@ -29,8 +38,16 @@ export class RisumParseError extends Error {
  */
 export interface RisumResult {
   module: RisuModule;
-  assets: Map<string, Uint8Array>;
+  assets: Uint8Array[];  // 에셋은 순서대로, module.assets[i]와 매핑
   version: number;
+}
+
+/**
+ * 메인 블록 JSON 구조
+ */
+interface RisumMainBlock {
+  type: 'risuModule';
+  module: RisuModule;
 }
 
 /**
@@ -41,60 +58,74 @@ export interface RisumResult {
 export function parseRisum(data: Uint8Array): RisumResult {
   logger.debug('risum', '파싱 시작', { size: data.length });
   
-  // RPack 디코딩
-  const decoded = rpackDecode(data);
-  const reader = new BinaryReader(decoded);
+  if (data.length < 6) {
+    throw new RisumParseError('File too small');
+  }
+  
+  const reader = new BinaryReader(data);
   
   // 매직 넘버 확인
-  const magic = reader.readBytes(4);
-  if (!arrayEquals(magic, RISUM_MAGIC)) {
-    throw new RisumParseError('Invalid risum magic number');
+  const magic = reader.readUint8();
+  if (magic !== RISUM_MAGIC) {
+    throw new RisumParseError(`Invalid risum magic number: expected 0x6F (111), got 0x${magic.toString(16)} (${magic})`);
   }
   
   // 버전 확인
-  const version = reader.readUint32();
+  const version = reader.readUint8();
   logger.debug('risum', '버전 확인', { version });
   
   if (version !== RISUM_VERSION) {
     logger.warn('risum', '예상과 다른 버전', { expected: RISUM_VERSION, actual: version });
   }
   
-  // 모듈 JSON 길이
-  const jsonLength = reader.readUint32();
+  // 메인 블록 읽기
+  const mainLength = reader.readUint32();
+  const mainBytes = reader.readBytes(mainLength);
   
-  // 모듈 JSON 파싱
-  const jsonBytes = reader.readBytes(jsonLength);
-  const jsonStr = new TextDecoder('utf-8').decode(jsonBytes);
+  // RPack 디코딩
+  const mainDecoded = rpackDecode(mainBytes);
+  const mainStr = new TextDecoder('utf-8').decode(mainDecoded);
   
-  let module: RisuModule;
+  let mainBlock: RisumMainBlock;
   try {
-    module = JSON.parse(jsonStr);
+    mainBlock = JSON.parse(mainStr);
   } catch (e) {
     throw new RisumParseError('Failed to parse module JSON', e);
   }
   
-  // 에셋 파싱
-  const assets = new Map<string, Uint8Array>();
-  const assetCount = reader.readUint32();
+  if (mainBlock.type !== 'risuModule') {
+    throw new RisumParseError(`Invalid block type: expected 'risuModule', got '${mainBlock.type}'`);
+  }
   
-  logger.debug('risum', '에셋 파싱', { count: assetCount });
+  const module = mainBlock.module;
   
-  for (let i = 0; i < assetCount; i++) {
-    // 에셋 ID 길이 + 데이터
-    const idLength = reader.readUint32();
-    const idBytes = reader.readBytes(idLength);
-    const assetId = new TextDecoder('utf-8').decode(idBytes);
+  // 에셋 블록 읽기
+  const assets: Uint8Array[] = [];
+  
+  while (reader.remaining > 0) {
+    const marker = reader.readUint8();
     
-    // 에셋 데이터 길이 + 데이터
-    const dataLength = reader.readUint32();
-    const assetData = reader.readBytes(dataLength);
+    if (marker === EOF_MARKER) {
+      // EOF 마커
+      break;
+    }
     
-    assets.set(assetId, assetData);
+    if (marker !== ASSET_MARKER) {
+      throw new RisumParseError(`Invalid asset marker: expected 0x01, got 0x${marker.toString(16)}`);
+    }
+    
+    // 에셋 데이터 읽기
+    const assetLength = reader.readUint32();
+    const assetBytes = reader.readBytes(assetLength);
+    
+    // RPack 디코딩
+    const assetDecoded = rpackDecode(assetBytes);
+    assets.push(assetDecoded);
   }
   
   logger.info('risum', '파싱 완료', {
     name: module.name,
-    assetsCount: assets.size,
+    assetsCount: assets.length,
     lorebookCount: module.lorebook?.length ?? 0,
     regexCount: module.regex?.length ?? 0,
     triggerCount: module.trigger?.length ?? 0
@@ -106,69 +137,80 @@ export function parseRisum(data: Uint8Array): RisumResult {
 /**
  * .risum 파일 생성
  * @param module 모듈 데이터
- * @param assets 에셋 맵 (ID → 데이터)
+ * @param assets 에셋 배열 (module.assets와 순서 매핑)
  * @returns risum 파일 바이트 데이터
  */
 export function exportRisum(
   module: RisuModule,
-  assets: Map<string, Uint8Array> = new Map()
+  assets: Uint8Array[] = []
 ): Uint8Array {
   logger.debug('risum', '내보내기 시작', { name: module.name });
   
   const writer = new BinaryWriter();
   
   // 매직 넘버
-  writer.writeBytes(RISUM_MAGIC);
+  writer.writeUint8(RISUM_MAGIC);
   
   // 버전
-  writer.writeUint32(RISUM_VERSION);
+  writer.writeUint8(RISUM_VERSION);
   
-  // 모듈 JSON
-  const jsonStr = JSON.stringify(module);
-  const jsonBytes = new TextEncoder().encode(jsonStr);
-  writer.writeUint32(jsonBytes.length);
-  writer.writeBytes(jsonBytes);
+  // 메인 블록
+  const mainBlock: RisumMainBlock = {
+    type: 'risuModule',
+    module: module
+  };
+  const mainStr = JSON.stringify(mainBlock);
+  const mainBytes = new TextEncoder().encode(mainStr);
+  const mainEncoded = rpackEncode(mainBytes);
   
-  // 에셋 개수
-  writer.writeUint32(assets.size);
+  writer.writeUint32(mainEncoded.length);
+  writer.writeBytes(mainEncoded);
   
-  // 에셋 데이터
-  for (const [id, data] of assets) {
-    const idBytes = new TextEncoder().encode(id);
-    writer.writeUint32(idBytes.length);
-    writer.writeBytes(idBytes);
-    writer.writeUint32(data.length);
-    writer.writeBytes(data);
+  // 에셋 블록
+  for (const asset of assets) {
+    writer.writeUint8(ASSET_MARKER);
+    const assetEncoded = rpackEncode(asset);
+    writer.writeUint32(assetEncoded.length);
+    writer.writeBytes(assetEncoded);
   }
+  
+  // EOF 마커
+  writer.writeUint8(EOF_MARKER);
   
   const result = writer.toBytes();
   
-  // RPack 인코딩
-  const encoded = rpackEncode(result);
+  logger.info('risum', '내보내기 완료', { size: result.length });
   
-  logger.info('risum', '내보내기 완료', { size: encoded.length });
-  
-  return encoded;
+  return result;
 }
 
 /**
  * 파일이 risum 포맷인지 확인
  */
 export function isRisumFile(data: Uint8Array): boolean {
-  if (data.length < 8) return false;
+  if (data.length < 6) return false;
   
-  // RPack 디코딩 후 매직 넘버 확인
-  const decoded = rpackDecode(data.slice(0, 8));
-  return arrayEquals(decoded.slice(0, 4), RISUM_MAGIC);
+  // 첫 바이트가 매직 넘버인지 확인
+  return data[0] === RISUM_MAGIC && data[1] === RISUM_VERSION;
 }
 
 /**
- * 배열 비교 헬퍼
+ * 에셋을 ID 맵으로 변환
+ * module.assets와 assets 배열을 매핑하여 ID → Uint8Array 맵 생성
  */
-function arrayEquals(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
+export function buildAssetMap(
+  module: RisuModule,
+  assets: Uint8Array[]
+): Map<string, Uint8Array> {
+  const map = new Map<string, Uint8Array>();
+  
+  if (!module.assets) return map;
+  
+  for (let i = 0; i < module.assets.length && i < assets.length; i++) {
+    const [name, , ext] = module.assets[i];
+    const id = `${name}.${ext}`;
+    map.set(id, assets[i]);
   }
-  return true;
+  
+  return map;
 }

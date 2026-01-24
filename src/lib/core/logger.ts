@@ -6,7 +6,7 @@
  */
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
-export type LogCategory = 'charx' | 'risum' | 'risup' | 'cbs' | 'regex' | 'trigger' | 'validation' | 'app';
+export type LogCategory = 'charx' | 'risum' | 'risup' | 'cbs' | 'regex' | 'trigger' | 'validation' | 'app' | 'file';
 
 export interface LogEntry {
   timestamp: number;

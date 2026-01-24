@@ -1,24 +1,63 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { parseCharx, parseRisum, parseRisup } from '$lib/core';
+  import { parseCharx, parseRisum, parseRisup, exportCharx, exportRisum, exportRisup, buildAssetMap } from '$lib/core';
   import { logger } from '$lib/core/logger';
+  import EditorScreen from '$lib/components/editor/EditorScreen.svelte';
 
   let fileData: any = null;
   let fileName = '';
-  let fileType = '';
+  let fileType: 'charx' | 'risum' | 'risup' | '' = '';
   let error = '';
   let isDragging = false;
   let loading = false;
+  
+  // 뷰 모드: 'drop' = 드롭존, 'json' = JSON 뷰어, 'edit' = 편집기
+  let viewMode: 'drop' | 'json' | 'edit' = 'drop';
 
-  function getFileType(name: string): string {
+  function getFileType(name: string): 'charx' | 'risum' | 'risup' | '' {
     const ext = name.split('.').pop()?.toLowerCase();
     switch (ext) {
       case 'charx': return 'charx';
       case 'risum': return 'risum';
       case 'risup':
       case 'risupreset': return 'risup';
-      default: return 'unknown';
+      default: return '';
     }
+  }
+
+  /**
+   * risum 파싱 결과를 UI용 데이터로 변환
+   */
+  function transformRisumData(result: any): any {
+    const { module, assets, version } = result;
+    
+    // 에셋 배열을 Map으로 변환 (module.assets와 매핑)
+    const assetMap = new Map<string, { name: string; ext: string; data: Uint8Array }>();
+    
+    if (module.assets && assets) {
+      for (let i = 0; i < module.assets.length && i < assets.length; i++) {
+        const [name, , ext] = module.assets[i];
+        const id = `${name}.${ext}`;
+        assetMap.set(id, {
+          name,
+          ext,
+          data: assets[i]
+        });
+      }
+    }
+    
+    return {
+      // 모듈 데이터
+      module,
+      // UI용 에셋 맵
+      assets: assetMap,
+      // 원본 에셋 배열 (export용)
+      _rawAssets: assets,
+      // 버전
+      version,
+      // 타입 표시
+      type: 'risum'
+    };
   }
 
   async function handleFile(file: File) {
@@ -39,7 +78,9 @@
           fileData = await parseCharx(data);
           break;
         case 'risum':
-          fileData = parseRisum(data);
+          // risum은 변환 필요
+          const risumResult = parseRisum(data);
+          fileData = transformRisumData(risumResult);
           break;
         case 'risup':
           fileData = await parseRisup(data);
@@ -51,6 +92,7 @@
 
       if (fileData) {
         logger.info('file', `Successfully parsed ${fileType} file`);
+        viewMode = 'edit'; // 파싱 후 자동으로 편집 모드로 전환
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Unknown error';
@@ -142,13 +184,72 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
+
+  function handleClose() {
+    fileData = null;
+    fileName = '';
+    fileType = '';
+    error = '';
+    viewMode = 'drop';
+  }
+
+  async function handleDownload(event: CustomEvent<any>) {
+    const data = event.detail;
+    if (!data || !fileType) return;
+
+    try {
+      let blob: Blob;
+      let downloadName = fileName;
+
+      switch (fileType) {
+        case 'charx':
+          const charxBytes = await exportCharx(data.card, data.assets);
+          blob = new Blob([new Uint8Array(charxBytes)], { type: 'application/zip' });
+          break;
+        case 'risum':
+          const risumBytes = exportRisum(data.module, data.assets);
+          blob = new Blob([new Uint8Array(risumBytes)], { type: 'application/octet-stream' });
+          break;
+        case 'risup':
+          // parseRisup() 결과는 { preset, format } 구조
+          const risupBytes = await exportRisup(data.preset);
+          blob = new Blob([new Uint8Array(risupBytes)], { type: 'application/octet-stream' });
+          break;
+        default:
+          return;
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = downloadName;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      logger.info('file', `Downloaded: ${downloadName}`);
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Download failed';
+      logger.error('file', `Download error: ${error}`);
+    }
+  }
 </script>
 
 <svelte:head>
   <title>RisuStudio</title>
 </svelte:head>
 
-<main>
+<!-- 편집기 모드 -->
+{#if viewMode === 'edit' && fileData && fileType}
+  <EditorScreen
+    data={fileData}
+    {fileType}
+    {fileName}
+    on:close={handleClose}
+    on:download={handleDownload}
+  />
+{:else}
+  <!-- 드롭존 모드 -->
+  <main>
   <header>
     <h1>RisuStudio</h1>
     <p class="subtitle">RisuAI Development IDE</p>
@@ -198,22 +299,8 @@
       <pre>{error}</pre>
     </div>
   {/if}
-
-  {#if fileData}
-    <section class="data-panel">
-      <div class="panel-header">
-        <h2>Parsed Data</h2>
-        <button on:click={() => { fileData = null; fileName = ''; }}>
-          Clear
-        </button>
-      </div>
-      
-      <div class="json-tree">
-        <pre>{formatJson(fileData)}</pre>
-      </div>
-    </section>
-  {/if}
 </main>
+{/if}
 
 <style>
   main {

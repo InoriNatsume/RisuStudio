@@ -659,10 +659,27 @@ async function main() {
   // 출력 폴더 생성
   fs.mkdirSync(outputDir, { recursive: true });
   
-  // JSON 저장
-  const jsonPath = path.join(outputDir, 'data.json');
+  // JSON 저장 (포맷별 파일명)
+  // RisuAI 원본 규칙: charx → card.json, risum → module.json, risup → preset.json
+  const jsonFileName = (() => {
+    switch (fileType) {
+      case 'charx':
+      case 'png':
+      case 'jpg':
+      case 'jpeg':
+        return 'card.json';
+      case 'risum':
+        return 'module.json';
+      case 'risup':
+      case 'risupreset':
+        return 'preset.json';
+      default:
+        return 'data.json';
+    }
+  })();
+  const jsonPath = path.join(outputDir, jsonFileName);
   fs.writeFileSync(jsonPath, JSON.stringify(result.json, null, 2), 'utf-8');
-  console.log(`💾 Saved: data.json`);
+  console.log(`💾 Saved: ${jsonFileName}`);
   
   // 에셋 저장 (경로 기반 중복 방지 - AssetGod 방식)
   if (result.assets.size > 0) {
