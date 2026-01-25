@@ -30,22 +30,35 @@
   function getAssetList(data: any): AssetEntry[] {
     if (!data) return [];
     
-    // risum 모듈 에셋 (새 구조: Map<string, {name, ext, data: Uint8Array}>)
+    // risum/charx 모듈 에셋 (새 구조: Map<string, {name, ext, data: Uint8Array, dataUrl?}>)
     if (data.assets && data.assets instanceof Map) {
       return Array.from(data.assets.entries()).map(([id, asset]: [string, any]) => {
         const ext = asset.ext || getExtension(id);
+        
+        // 이미 dataUrl이 있으면 사용 (charx 변환에서 미리 계산됨)
+        if (asset.dataUrl) {
+          return {
+            id,
+            name: asset.name || id,
+            ext,
+            type: asset.type || getAssetType(ext),
+            data: asset.data,
+            dataUrl: asset.dataUrl,
+            size: asset.size || (asset.data?.length || 0)
+          };
+        }
+        
         const isUint8Array = asset.data instanceof Uint8Array;
         
-        // Uint8Array를 base64로 변환
+        // Uint8Array를 base64로 변환 (magic bytes 감지 사용)
         let dataUrl = '';
         let size = 0;
         
         if (isUint8Array) {
           size = asset.data.length;
           try {
-            // Uint8Array → base64 → dataUrl
-            const base64 = uint8ArrayToBase64(asset.data);
-            dataUrl = `data:${getMimeType(ext)};base64,${base64}`;
+            // AssetGod 방식: magic bytes 우선 감지
+            dataUrl = createDataUrlFromBytes(asset.data, ext);
           } catch (e) {
             console.error('Asset conversion error:', e);
           }
@@ -82,8 +95,8 @@
         if (assetData instanceof Uint8Array) {
           size = assetData.length;
           try {
-            const base64 = uint8ArrayToBase64(assetData);
-            dataUrl = `data:${getMimeType(ext)};base64,${base64}`;
+            // AssetGod 방식: magic bytes 우선 감지
+            dataUrl = createDataUrlFromBytes(assetData, ext);
           } catch (e) {
             console.error('Asset conversion error:', e);
           }
@@ -121,14 +134,68 @@
     return [];
   }
   
-  // Uint8Array를 base64로 변환
+  // Uint8Array를 base64로 변환 (청크 방식 - 큰 파일 지원)
   function uint8ArrayToBase64(bytes: Uint8Array): string {
+    const chunkSize = 8192;
     let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.byteLength));
+      binary += String.fromCharCode.apply(null, Array.from(chunk));
     }
     return btoa(binary);
+  }
+  
+  /**
+   * AssetGod 방식: magic bytes로 이미지 포맷 감지
+   */
+  function detectImageFormat(data: Uint8Array): string | null {
+    if (!data || data.length < 12) return null;
+    
+    // PNG: 89 50 4E 47
+    if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) return 'png';
+    
+    // JPEG: FF D8 FF
+    if (data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF) return 'jpeg';
+    
+    // GIF: 47 49 46 38
+    if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) return 'gif';
+    
+    // WebP: RIFF....WEBP
+    if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 &&
+        data.length > 11 && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return 'webp';
+    
+    // AVIF/HEIC: ....ftyp
+    if (data.length > 12 && data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) {
+      const brand = String.fromCharCode(data[8], data[9], data[10], data[11]);
+      if (brand === 'avif' || brand === 'avis' || brand === 'mif1' || brand === 'heic') return 'avif';
+    }
+    
+    return null;
+  }
+  
+  /**
+   * dataUrl을 생성할 때 magic bytes 우선 사용
+   */
+  function createDataUrlFromBytes(data: Uint8Array, ext: string): string {
+    // 1. magic bytes로 이미지 포맷 감지
+    const detectedFormat = detectImageFormat(data);
+    
+    if (detectedFormat) {
+      const formatMimeMap: Record<string, string> = {
+        'png': 'image/png',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'webp': 'image/webp',
+        'avif': 'image/avif'
+      };
+      const mimeType = formatMimeMap[detectedFormat] || 'image/png';
+      const base64 = uint8ArrayToBase64(data);
+      return `data:${mimeType};base64,${base64}`;
+    }
+    
+    // 2. 확장자 기반 폴백
+    const base64 = uint8ArrayToBase64(data);
+    return `data:${getMimeType(ext)};base64,${base64}`;
   }
 
   function getExtension(name: string): string {

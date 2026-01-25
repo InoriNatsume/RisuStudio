@@ -3,6 +3,7 @@
   import { parseCharx, parseRisum, parseRisup, exportCharx, exportRisum, exportRisup, buildAssetMap } from '$lib/core';
   import { logger } from '$lib/core/logger';
   import EditorScreen from '$lib/components/editor/EditorScreen.svelte';
+  import { strFromU8 } from 'fflate';
 
   let fileData: any = null;
   let fileName = '';
@@ -23,6 +24,323 @@
       case 'risupreset': return 'risup';
       default: return '';
     }
+  }
+
+  /**
+   * charx 파싱 결과를 UI용 데이터로 변환
+   * RisuAI characterCards.ts의 importCharacterCardSpec 로직 참조
+   */
+  function transformCharxData(result: any): any {
+    const { card, assets, raw } = result;
+    const cardData = card.data;
+    
+    // extensions.risuai 확인 (RisuAI에서 customScripts, triggerscript 저장 위치)
+    const risuext = cardData?.extensions?.risuai;
+    
+    // 디버깅: 실제 구조 확인
+    console.log('[charx] card.spec:', card.spec);
+    console.log('[charx] cardData keys:', Object.keys(cardData || {}));
+    console.log('[charx] extensions keys:', Object.keys(cardData?.extensions || {}));
+    console.log('[charx] risuext keys:', Object.keys(risuext || {}));
+    console.log('[charx] ZIP 파일 목록:', Array.from(assets.keys()));
+    
+    // module.risum 확인 - charx 내부에 모듈이 포함되어 있는지
+    let moduleData: any = null;
+    const moduleRisumData = assets.get('module.risum') || raw?.['module.risum'];
+    if (moduleRisumData) {
+      console.log('[charx] module.risum 발견! 크기:', moduleRisumData.length);
+      try {
+        const parsedModule = parseRisum(moduleRisumData);
+        moduleData = parsedModule.module;
+        console.log('[charx] module.risum 파싱 성공:', {
+          name: moduleData?.name,
+          regex: moduleData?.regex?.length,
+          trigger: moduleData?.trigger?.length
+        });
+      } catch (e) {
+        console.warn('[charx] module.risum 파싱 실패:', e);
+      }
+    }
+    
+    // 에셋 딕셔너리 생성 (경로 → 바이트 데이터)
+    const assetDict: Record<string, Uint8Array> = {};
+    for (const [path, data] of assets) {
+      assetDict[path] = data;
+    }
+    
+    // 로어북 변환 (character_book → globalLore 형식)
+    const lorebook: any[] = [];
+    const charbook = cardData.character_book;
+    if (charbook?.entries) {
+      const entries = Array.isArray(charbook.entries) ? charbook.entries : Object.values(charbook.entries);
+      for (const book of entries) {
+        lorebook.push({
+          key: book.keys?.join(', ') ?? '',
+          secondkey: book.secondary_keys?.join(', ') ?? '',
+          insertorder: book.insertion_order ?? 0,
+          comment: book.name ?? book.comment ?? '',
+          content: book.content ?? '',
+          mode: 'normal',
+          alwaysActive: book.constant ?? false,
+          selective: book.selective ?? false,
+          useRegex: book.use_regex ?? false,
+          activationPercent: book.extensions?.risu_activationPercent ?? 100
+        });
+      }
+    }
+    
+    // Regex 변환 - 여러 가능한 경로에서 탐색
+    // 1. module.risum이 있으면 그 안의 regex 사용
+    // 2. extensions.risuai.customScripts (대문자 S!)
+    // 3. data.customscript
+    let regex = moduleData?.regex ?? [];
+    if (!regex || regex.length === 0) {
+      regex = risuext?.customScripts ?? [];
+    }
+    if (!regex || regex.length === 0) {
+      regex = cardData?.customscript ?? [];
+    }
+    if (!regex || regex.length === 0) {
+      regex = risuext?.customscripts ?? [];
+    }
+    console.log('[charx] regex source - module:', moduleData?.regex?.length,
+                'risuext?.customScripts:', risuext?.customScripts?.length, 
+                'cardData?.customscript:', cardData?.customscript?.length);
+    
+    // 트리거 변환 - 여러 가능한 경로에서 탐색
+    // 1. module.risum이 있으면 그 안의 trigger 사용
+    // 2. extensions.risuai.triggerscript
+    // 3. data.triggerscript
+    let trigger = moduleData?.trigger ?? [];
+    if (!trigger || trigger.length === 0) {
+      trigger = risuext?.triggerscript ?? [];
+    }
+    if (!trigger || trigger.length === 0) {
+      trigger = cardData?.triggerscript ?? [];
+    }
+    console.log('[charx] trigger source - module:', moduleData?.trigger?.length,
+                'risuext?.triggerscript:', risuext?.triggerscript?.length,
+                'cardData?.triggerscript:', cardData?.triggerscript?.length);
+    
+    console.log('[charx] 변환 결과 - lorebook:', lorebook.length, 'regex:', regex.length, 'trigger:', trigger.length);
+    
+    // 에셋 맵 생성
+    const assetMap = new Map<string, { id: string; name: string; ext: string; type: string; data: Uint8Array; dataUrl: string; size: number }>();
+    
+    // 에셋 경로 해석 함수
+    function resolveAssetPath(uri: string): Uint8Array | null {
+      if (!uri) return null;
+      
+      // __asset: 경로
+      if (uri.startsWith('__asset:')) {
+        const key = uri.replace('__asset:', '');
+        return assetDict[key] || assetDict[`assets/${key}`] || null;
+      }
+      
+      // embeded:// 경로
+      if (uri.startsWith('embeded://')) {
+        const key = uri.replace('embeded://', '');
+        return assetDict[key] || assetDict[`assets/${key}`] || null;
+      }
+      
+      // 직접 경로
+      return assetDict[uri] || assetDict[`assets/${uri}`] || null;
+    }
+    
+    // CCv3 assets 필드 처리 (card.data.assets)
+    if (cardData.assets && Array.isArray(cardData.assets)) {
+      for (const asset of cardData.assets) {
+        const uri = asset.uri;
+        const assetData = resolveAssetPath(uri);
+        
+        if (assetData) {
+          const fileName = asset.name || uri.split('/').pop() || 'unnamed';
+          const ext = asset.ext || fileName.split('.').pop()?.toLowerCase() || '';
+          const id = fileName;
+          
+          if (!assetMap.has(id)) {
+            assetMap.set(id, {
+              id,
+              name: fileName,
+              ext,
+              type: asset.type || getAssetType(ext),
+              data: assetData,
+              dataUrl: createDataUrl(assetData, ext),
+              size: assetData.length
+            });
+          }
+        }
+      }
+    }
+    
+    // additionalAssets 처리 (risuai extension)
+    const additionalAssets = risuext?.additionalAssets ?? [];
+    for (const asset of additionalAssets) {
+      const [assetName, assetPath, rawFileName] = asset;
+      const ext = rawFileName ? rawFileName.split('.').pop()?.toLowerCase() || '' : '';
+      const assetData = resolveAssetPath(assetPath);
+      
+      if (assetData) {
+        const id = assetName || rawFileName || assetPath;
+        if (!assetMap.has(id)) {
+          assetMap.set(id, {
+            id,
+            name: assetName,
+            ext,
+            type: getAssetType(ext),
+            data: assetData,
+            dataUrl: createDataUrl(assetData, ext),
+            size: assetData.length
+          });
+        }
+      }
+    }
+    
+    // ZIP 내 모든 파일 추가 (card.json 제외)
+    for (const [path, data] of assets) {
+      if (path === 'card.json') continue;
+      
+      // 파일명과 확장자 추출
+      const pathParts = path.split('/');
+      const fullName = pathParts[pathParts.length - 1] || path;
+      const nameParts = fullName.split('.');
+      const ext = nameParts.length > 1 ? nameParts.pop()?.toLowerCase() || '' : '';
+      const name = nameParts.join('.');
+      
+      // id는 경로에서 assets/ 제거한 것 또는 파일명
+      const id = path.startsWith('assets/') ? path.slice(7) : path;
+      
+      if (!assetMap.has(id) && !assetMap.has(name)) {
+        assetMap.set(id, {
+          id,
+          name: name || fullName,
+          ext,
+          type: getAssetType(ext),
+          data,
+          dataUrl: createDataUrl(data, ext),
+          size: data.length
+        });
+      }
+    }
+    
+    console.log('[charx] assetMap size:', assetMap.size, 'first 5 keys:', Array.from(assetMap.keys()).slice(0, 5));
+    
+    return {
+      card,
+      cardData,
+      // RisuAI 내부 포맷과 호환
+      lorebook,
+      regex,
+      trigger,
+      // 에셋
+      assets: assetMap,
+      // 원본
+      _raw: raw,
+      type: 'charx'
+    };
+  }
+  
+  function getAssetType(ext: string): string {
+    const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'];
+    const audioExts = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac'];
+    const videoExts = ['mp4', 'webm', 'mov', 'avi'];
+    
+    if (imageExts.includes(ext)) return 'image';
+    if (audioExts.includes(ext)) return 'audio';
+    if (videoExts.includes(ext)) return 'video';
+    return 'other';
+  }
+  
+  /**
+   * AssetGod 방식: magic bytes로 이미지 포맷 감지
+   * 확장자가 없거나 잘못된 경우에도 정확하게 이미지 형식 판별
+   */
+  function detectImageFormat(data: Uint8Array): string | null {
+    if (!data || data.length < 12) return null;
+    
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) return 'png';
+    
+    // JPEG: FF D8 FF
+    if (data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF) return 'jpeg';
+    
+    // GIF: 47 49 46 38 (GIF8)
+    if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) return 'gif';
+    
+    // WebP: RIFF....WEBP (52 49 46 46 ... 57 45 42 50)
+    if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 &&
+        data.length > 11 && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return 'webp';
+    
+    // AVIF/HEIC: ....ftyp (offset 4-7 = 66 74 79 70)
+    if (data.length > 12 && data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) {
+      const brand = String.fromCharCode(data[8], data[9], data[10], data[11]);
+      if (brand === 'avif' || brand === 'avis' || brand === 'mif1' || brand === 'heic') return 'avif';
+    }
+    
+    // BMP: 42 4D
+    if (data[0] === 0x42 && data[1] === 0x4D) return 'bmp';
+    
+    return null;
+  }
+  
+  /**
+   * AssetGod 방식: magic bytes 우선, 확장자 폴백으로 MIME 타입 결정
+   */
+  function createDataUrl(data: Uint8Array, ext: string): string {
+    // 1. magic bytes로 이미지 포맷 감지 시도
+    const detectedFormat = detectImageFormat(data);
+    
+    // 2. 감지된 포맷이 있으면 해당 MIME 사용
+    if (detectedFormat) {
+      const formatMimeMap: Record<string, string> = {
+        'png': 'image/png',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'webp': 'image/webp',
+        'avif': 'image/avif',
+        'bmp': 'image/bmp'
+      };
+      const mimeType = formatMimeMap[detectedFormat] || 'image/png';
+      const base64 = uint8ArrayToBase64(data);
+      return `data:${mimeType};base64,${base64}`;
+    }
+    
+    // 3. 확장자 기반 폴백
+    const mimeTypes: Record<string, string> = {
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'webp': 'image/webp',
+      'avif': 'image/avif',
+      'bmp': 'image/bmp',
+      'mp3': 'audio/mpeg',
+      'wav': 'audio/wav',
+      'ogg': 'audio/ogg',
+      'mp4': 'video/mp4',
+      'webm': 'video/webm',
+      'json': 'application/json',
+      'css': 'text/css',
+      'ttf': 'font/ttf',
+      'otf': 'font/otf',
+      'woff': 'font/woff',
+      'woff2': 'font/woff2'
+    };
+    
+    const mimeType = mimeTypes[ext] || 'application/octet-stream';
+    const base64 = uint8ArrayToBase64(data);
+    return `data:${mimeType};base64,${base64}`;
+  }
+  
+  function uint8ArrayToBase64(bytes: Uint8Array): string {
+    // 큰 파일 처리를 위한 청크 방식 (AssetGod 참조)
+    const chunkSize = 8192;
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.byteLength));
+      binary += String.fromCharCode.apply(null, Array.from(chunk));
+    }
+    return btoa(binary);
   }
 
   /**
@@ -75,7 +393,9 @@
 
       switch (fileType) {
         case 'charx':
-          fileData = await parseCharx(data);
+          // charx도 변환 필요
+          const charxResult = await parseCharx(data);
+          fileData = transformCharxData(charxResult);
           break;
         case 'risum':
           // risum은 변환 필요
