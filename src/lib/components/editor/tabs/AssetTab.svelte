@@ -27,6 +27,10 @@
   // 도구 모달 상태
   let showSearchModal = false;
   let searchQuery = '';
+  let searchMode: 'name' | 'nai' | 'comfy' = 'name';
+  
+  // EXIF 캐시 (검색용)
+  let exifCache: Map<string, ExtractedMetadata | null> = new Map();
   
   // 검증 결과
   let validationResults: { id: string; name: string; status: 'ok' | 'warn' | 'error'; message: string }[] = [];
@@ -117,7 +121,8 @@
       
       const result = entries.map(([id, asset]) => {
         const ext = asset.ext || getExtension(id);
-        const type = asset.type || getAssetType(ext);
+        // 확장자 기반으로 타입 결정 (x-risu-asset 같은 원본 타입 무시)
+        const type = getAssetType(ext);
         
         // 이미 dataUrl이 있으면 사용 (charx 변환에서 미리 계산됨)
         if (asset.dataUrl && asset.dataUrl.length > 0) {
@@ -597,10 +602,182 @@
     dispatch('change', newData);
   }
   
-  /** 검색 필터링 */
-  $: filteredAssetList = searchQuery 
-    ? assetList.filter(a => a.name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : assetList;
+  /** EXIF 캐시에서 가져오거나 로드 */
+  async function getExifFromCache(asset: AssetEntry): Promise<ExtractedMetadata | null> {
+    if (exifCache.has(asset.id)) {
+      return exifCache.get(asset.id) || null;
+    }
+    
+    try {
+      let buffer: ArrayBuffer;
+      if (asset.data instanceof Uint8Array) {
+        buffer = asset.data.buffer.slice(
+          asset.data.byteOffset,
+          asset.data.byteOffset + asset.data.byteLength
+        );
+      } else if (typeof asset.data === 'string') {
+        const binary = atob(asset.data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        buffer = bytes.buffer;
+      } else {
+        return null;
+      }
+      
+      const metadata = await extractImageMetadata(buffer);
+      exifCache.set(asset.id, metadata);
+      return metadata;
+    } catch {
+      exifCache.set(asset.id, null);
+      return null;
+    }
+  }
+  
+  /** 태그 정규화 (ExifBased_namer 방식) */
+  function normalizeTag(tag: string): string {
+    return tag.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+  
+  /** 검색어가 태그에 매칭되는지 확인 */
+  function matchTags(searchTerms: string[], tags: string[]): boolean {
+    const normalizedTags = tags.map(normalizeTag);
+    return searchTerms.every(term => {
+      const normalizedTerm = normalizeTag(term);
+      return normalizedTags.some(tag => tag.includes(normalizedTerm));
+    });
+  }
+  
+  /** NAI EXIF에서 태그 검색 */
+  function searchInNaiMeta(meta: NAINormalizedMeta, searchTerms: string[]): boolean {
+    const allTags: string[] = [];
+    
+    // positive/negative 프롬프트에서 태그 추출
+    if (meta.positive) {
+      allTags.push(...meta.positive.split(',').map(t => t.trim()).filter(Boolean));
+    }
+    if (meta.negative) {
+      allTags.push(...meta.negative.split(',').map(t => t.trim()).filter(Boolean));
+    }
+    
+    // 캐릭터 프롬프트
+    if (meta.charPrompts) {
+      for (const char of meta.charPrompts) {
+        if (char.caption) {
+          allTags.push(...char.caption.split(',').map(t => t.trim()).filter(Boolean));
+        }
+      }
+    }
+    
+    // 모델명도 검색 대상
+    if (meta.model) allTags.push(meta.model);
+    if (meta.sampler) allTags.push(meta.sampler);
+    
+    return matchTags(searchTerms, allTags);
+  }
+  
+  /** ComfyUI EXIF에서 검색 (워크플로우 뷰어 검색과 동일) */
+  function searchInComfyMeta(meta: ComfyNormalizedMeta, searchTerms: string[]): boolean {
+    const allContent: string[] = [];
+    
+    // 프롬프트
+    if (meta.positive) allContent.push(meta.positive);
+    if (meta.negative) allContent.push(meta.negative);
+    
+    // 모델 정보
+    if (meta.checkpoint) allContent.push(meta.checkpoint);
+    if (meta.vae) allContent.push(meta.vae);
+    if (meta.sampler) allContent.push(meta.sampler);
+    if (meta.loras) {
+      for (const lora of meta.loras) {
+        allContent.push(lora.name);
+      }
+    }
+    
+    // 노드에서 검색
+    if (meta.prompt) {
+      for (const [nodeId, node] of Object.entries(meta.prompt)) {
+        allContent.push(node.class_type);
+        if (node._meta?.title) allContent.push(node._meta.title);
+        if (node.inputs) {
+          for (const [key, value] of Object.entries(node.inputs)) {
+            if (typeof value === 'string') allContent.push(value);
+          }
+        }
+      }
+    }
+    
+    const combined = allContent.join(' ').toLowerCase();
+    return searchTerms.every(term => combined.includes(normalizeTag(term)));
+  }
+  
+  /** 검색 필터링 (EXIF 검색 포함) */
+  let filteredAssetList: AssetEntry[] = [];
+  let isSearching = false;
+  
+  async function updateFilteredList() {
+    if (!searchQuery.trim()) {
+      filteredAssetList = assetList;
+      return;
+    }
+    
+    const query = searchQuery.toLowerCase();
+    const searchTerms = query.split(/[,&+]/).map(t => t.trim()).filter(Boolean);
+    
+    if (searchMode === 'name') {
+      // 이름 검색
+      filteredAssetList = assetList.filter(a => 
+        a.name.toLowerCase().includes(query) || a.id.toLowerCase().includes(query)
+      );
+    } else {
+      // EXIF 검색
+      isSearching = true;
+      const results: AssetEntry[] = [];
+      
+      for (const asset of assetList) {
+        // 이미지만 검색
+        if (!['png', 'jpg', 'jpeg', 'webp', 'avif'].includes(asset.ext)) continue;
+        
+        const meta = await getExifFromCache(asset);
+        if (!meta) continue;
+        
+        if (searchMode === 'nai' && meta.modelKind === 'nai' && meta.normalized) {
+          if (searchInNaiMeta(meta.normalized as NAINormalizedMeta, searchTerms)) {
+            results.push(asset);
+          }
+        } else if (searchMode === 'comfy' && meta.modelKind === 'comfy') {
+          // ComfyUI는 normalized 없어도 pngText에서 검색
+          const comfyMeta = meta.normalized as ComfyNormalizedMeta | null;
+          if (comfyMeta && searchInComfyMeta(comfyMeta, searchTerms)) {
+            results.push(asset);
+          } else if (meta.pngText) {
+            // pngText에서 직접 검색
+            const promptStr = meta.pngText['prompt']?.[0] || '';
+            const workflowStr = meta.pngText['workflow']?.[0] || '';
+            const combined = (promptStr + ' ' + workflowStr).toLowerCase();
+            if (searchTerms.every(term => combined.includes(normalizeTag(term)))) {
+              results.push(asset);
+            }
+          }
+        }
+      }
+      
+      filteredAssetList = results;
+      isSearching = false;
+    }
+  }
+  
+  // 검색어/모드 변경 시 필터링
+  $: if (searchQuery !== undefined && searchMode !== undefined) {
+    updateFilteredList();
+  }
+  
+  // assetList 변경 시 필터링 업데이트
+  $: if (assetList) {
+    exifCache.clear(); // 캐시 초기화
+    updateFilteredList();
+  }
 
   function openFileDialog() {
     fileInput?.click();
@@ -627,14 +804,17 @@
     const newData = structuredClone(data);
     const id = crypto.randomUUID();
     const ext = getExtension(name);
+    
+    // 중복 이름 검사 및 고유 이름 생성
+    const uniqueName = generateUniqueName(name);
 
     if (newData.assets && newData.assets instanceof Map) {
-      newData.assets.set(id, { name, ext, data: base64Data });
+      newData.assets.set(id, { name: uniqueName, ext, data: base64Data });
     } else if (newData.additionalAssets) {
-      newData.additionalAssets.push([id, name, base64Data]);
+      newData.additionalAssets.push([id, uniqueName, base64Data]);
     } else {
       // 새로 생성
-      newData.additionalAssets = [[id, name, base64Data]];
+      newData.additionalAssets = [[id, uniqueName, base64Data]];
     }
 
     dispatch('change', newData);
@@ -730,6 +910,434 @@
     }
   }
 
+  // 복수 에셋 선택 상태
+  let selectedAssetIds: Set<string> = new Set();
+  let isMultiSelectMode = false;
+
+  function toggleMultiSelect() {
+    isMultiSelectMode = !isMultiSelectMode;
+    if (!isMultiSelectMode) {
+      selectedAssetIds.clear();
+      selectedAssetIds = selectedAssetIds;
+    }
+  }
+
+  function toggleAssetSelection(id: string) {
+    if (selectedAssetIds.has(id)) {
+      selectedAssetIds.delete(id);
+    } else {
+      selectedAssetIds.add(id);
+    }
+    selectedAssetIds = selectedAssetIds;
+  }
+
+  function selectAllAssets() {
+    filteredAssetList.forEach(a => selectedAssetIds.add(a.id));
+    selectedAssetIds = selectedAssetIds;
+  }
+
+  function deselectAllAssets() {
+    selectedAssetIds.clear();
+    selectedAssetIds = selectedAssetIds;
+  }
+
+  // 다중 에셋 ZIP 다운로드
+  async function downloadSelectedAssets() {
+    if (selectedAssetIds.size === 0) {
+      alert('선택된 에셋이 없습니다.');
+      return;
+    }
+    const assets = assetList.filter(a => selectedAssetIds.has(a.id));
+    await downloadAssetsAsZip(assets, 'selected_assets.zip');
+  }
+
+  async function downloadAllAssets() {
+    if (assetList.length === 0) {
+      alert('다운로드할 에셋이 없습니다.');
+      return;
+    }
+    await downloadAssetsAsZip(assetList, 'all_assets.zip');
+  }
+
+  // 간단한 ZIP 생성 유틸리티 (라이브러리 없이)
+  function createZip(files: { name: string; data: Uint8Array }[]): Uint8Array {
+    const localHeaders: Uint8Array[] = [];
+    const centralHeaders: Uint8Array[] = [];
+    let offset = 0;
+
+    for (const file of files) {
+      const nameBytes = new TextEncoder().encode(file.name);
+      const crc = crc32(file.data);
+      
+      // Local file header
+      const localHeader = new Uint8Array(30 + nameBytes.length);
+      const localView = new DataView(localHeader.buffer);
+      localView.setUint32(0, 0x04034b50, true); // signature
+      localView.setUint16(4, 20, true); // version needed
+      localView.setUint16(6, 0, true); // flags
+      localView.setUint16(8, 0, true); // compression (store)
+      localView.setUint16(10, 0, true); // mod time
+      localView.setUint16(12, 0, true); // mod date
+      localView.setUint32(14, crc, true); // crc32
+      localView.setUint32(18, file.data.length, true); // compressed size
+      localView.setUint32(22, file.data.length, true); // uncompressed size
+      localView.setUint16(26, nameBytes.length, true); // filename length
+      localView.setUint16(28, 0, true); // extra field length
+      localHeader.set(nameBytes, 30);
+      
+      localHeaders.push(localHeader);
+      localHeaders.push(file.data);
+      
+      // Central directory header
+      const centralHeader = new Uint8Array(46 + nameBytes.length);
+      const centralView = new DataView(centralHeader.buffer);
+      centralView.setUint32(0, 0x02014b50, true); // signature
+      centralView.setUint16(4, 20, true); // version made by
+      centralView.setUint16(6, 20, true); // version needed
+      centralView.setUint16(8, 0, true); // flags
+      centralView.setUint16(10, 0, true); // compression
+      centralView.setUint16(12, 0, true); // mod time
+      centralView.setUint16(14, 0, true); // mod date
+      centralView.setUint32(16, crc, true); // crc32
+      centralView.setUint32(20, file.data.length, true); // compressed size
+      centralView.setUint32(24, file.data.length, true); // uncompressed size
+      centralView.setUint16(28, nameBytes.length, true); // filename length
+      centralView.setUint16(30, 0, true); // extra field length
+      centralView.setUint16(32, 0, true); // comment length
+      centralView.setUint16(34, 0, true); // disk number
+      centralView.setUint16(36, 0, true); // internal attrs
+      centralView.setUint32(38, 0, true); // external attrs
+      centralView.setUint32(42, offset, true); // local header offset
+      centralHeader.set(nameBytes, 46);
+      
+      centralHeaders.push(centralHeader);
+      offset += localHeader.length + file.data.length;
+    }
+    
+    const centralDirOffset = offset;
+    let centralDirSize = 0;
+    for (const h of centralHeaders) centralDirSize += h.length;
+    
+    // End of central directory
+    const endRecord = new Uint8Array(22);
+    const endView = new DataView(endRecord.buffer);
+    endView.setUint32(0, 0x06054b50, true); // signature
+    endView.setUint16(4, 0, true); // disk number
+    endView.setUint16(6, 0, true); // central dir disk
+    endView.setUint16(8, files.length, true); // entries on disk
+    endView.setUint16(10, files.length, true); // total entries
+    endView.setUint32(12, centralDirSize, true); // central dir size
+    endView.setUint32(16, centralDirOffset, true); // central dir offset
+    endView.setUint16(20, 0, true); // comment length
+    
+    // Combine all parts
+    const totalSize = offset + centralDirSize + 22;
+    const result = new Uint8Array(totalSize);
+    let pos = 0;
+    for (const part of localHeaders) { result.set(part, pos); pos += part.length; }
+    for (const part of centralHeaders) { result.set(part, pos); pos += part.length; }
+    result.set(endRecord, pos);
+    
+    return result;
+  }
+
+  // CRC32 계산
+  function crc32(data: Uint8Array): number {
+    let crc = 0xFFFFFFFF;
+    const table = getCrc32Table();
+    for (let i = 0; i < data.length; i++) {
+      crc = (crc >>> 8) ^ table[(crc ^ data[i]) & 0xFF];
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  let crc32Table: Uint32Array | null = null;
+  function getCrc32Table(): Uint32Array {
+    if (crc32Table) return crc32Table;
+    crc32Table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let j = 0; j < 8; j++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      crc32Table[i] = c >>> 0;
+    }
+    return crc32Table;
+  }
+
+  async function downloadAssetsAsZip(assets: AssetEntry[], zipName: string) {
+    try {
+      const confirmed = confirm(`${assets.length}개의 에셋을 ZIP으로 압축하여 다운로드합니다. 계속하시겠습니까?`);
+      if (!confirmed) return;
+      
+      // 파일 데이터 수집
+      const files: { name: string; data: Uint8Array }[] = [];
+      
+      for (const asset of assets) {
+        const filename = asset.name.includes('.') ? asset.name : `${asset.name}.${asset.ext}`;
+        let data: Uint8Array | null = null;
+        
+        // dataUrl에서 데이터 추출
+        if (asset.dataUrl && asset.dataUrl.length > 0) {
+          if (asset.dataUrl.startsWith('blob:')) {
+            try {
+              const res = await fetch(asset.dataUrl);
+              const blob = await res.blob();
+              data = new Uint8Array(await blob.arrayBuffer());
+            } catch { continue; }
+          } else if (asset.dataUrl.startsWith('data:')) {
+            const base64 = asset.dataUrl.split(',')[1];
+            if (base64) {
+              const binary = atob(base64);
+              data = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
+            }
+          }
+        }
+        
+        // asset.data에서 데이터 추출
+        if (!data && asset.data) {
+          if (asset.data instanceof Uint8Array) {
+            data = asset.data;
+          } else if (ArrayBuffer.isView(asset.data)) {
+            data = new Uint8Array(asset.data.buffer, asset.data.byteOffset, asset.data.byteLength);
+          } else if (typeof asset.data === 'string') {
+            const binary = atob(asset.data);
+            data = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
+          } else if (typeof (asset.data as ArrayLike<number>).length === 'number') {
+            data = new Uint8Array(asset.data as ArrayLike<number>);
+          }
+        }
+        
+        if (data) {
+          files.push({ name: filename, data });
+        }
+      }
+      
+      if (files.length === 0) {
+        alert('다운로드할 수 있는 에셋이 없습니다.');
+        return;
+      }
+      
+      // ZIP 생성 및 다운로드
+      const zipData = createZip(files);
+      const blob = new Blob([zipData.buffer as ArrayBuffer], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = zipName;
+      link.click();
+      
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      alert(`${files.length}개의 에셋을 ZIP으로 다운로드 완료!`);
+    } catch (e) {
+      console.error('[AssetTab] ZIP download error:', e);
+      alert('ZIP 다운로드 실패: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  function downloadAssetPromise(asset: AssetEntry): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        const link = document.createElement('a');
+        const filename = asset.name.includes('.') ? asset.name : `${asset.name}.${asset.ext}`;
+        
+        if (asset.dataUrl && asset.dataUrl.length > 0) {
+          if (asset.dataUrl.startsWith('blob:')) {
+            fetch(asset.dataUrl)
+              .then(res => res.blob())
+              .then(blob => {
+                const newUrl = URL.createObjectURL(blob);
+                link.href = newUrl;
+                link.download = filename;
+                link.click();
+                setTimeout(() => { URL.revokeObjectURL(newUrl); resolve(); }, 100);
+              })
+              .catch(reject);
+            return;
+          }
+          link.href = asset.dataUrl;
+          link.download = filename;
+          link.click();
+          resolve();
+          return;
+        }
+        
+        if (!asset.data) {
+          reject(new Error('No data available'));
+          return;
+        }
+        
+        const isTypedArray = asset.data instanceof Uint8Array || ArrayBuffer.isView(asset.data);
+        const isArrayLike = !isTypedArray && 
+          typeof asset.data !== 'string' &&
+          typeof (asset.data as ArrayLike<number>).length === 'number';
+        
+        if (isTypedArray) {
+          const blob = new Blob([new Uint8Array(asset.data as Uint8Array)], { type: getMimeType(asset.ext) });
+          link.href = URL.createObjectURL(blob);
+        } else if (isArrayLike) {
+          const bytes = new Uint8Array(asset.data as ArrayLike<number>);
+          const blob = new Blob([bytes], { type: getMimeType(asset.ext) });
+          link.href = URL.createObjectURL(blob);
+        } else if (typeof asset.data === 'string') {
+          link.href = `data:${getMimeType(asset.ext)};base64,${asset.data}`;
+        } else {
+          reject(new Error('Unknown data type'));
+          return;
+        }
+        
+        link.download = filename;
+        link.click();
+        if (link.href.startsWith('blob:')) {
+          setTimeout(() => { URL.revokeObjectURL(link.href); resolve(); }, 100);
+        } else {
+          resolve();
+        }
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  // 이름 중복 검사
+  function isNameDuplicate(name: string, excludeId?: string): boolean {
+    return assetList.some(a => a.id !== excludeId && a.name.toLowerCase() === name.toLowerCase());
+  }
+
+  // 고유한 이름 생성 (중복 시 자동 번호 추가)
+  function generateUniqueName(baseName: string, excludeId?: string): string {
+    let name = baseName;
+    let counter = 1;
+    
+    // 확장자 분리
+    const lastDot = baseName.lastIndexOf('.');
+    const nameWithoutExt = lastDot > 0 ? baseName.substring(0, lastDot) : baseName;
+    const ext = lastDot > 0 ? baseName.substring(lastDot) : '';
+    
+    while (isNameDuplicate(name, excludeId)) {
+      name = `${nameWithoutExt}_${counter}${ext}`;
+      counter++;
+    }
+    return name;
+  }
+
+  // 에셋 이름 변경
+  async function renameAsset(assetId: string) {
+    const asset = assetList.find(a => a.id === assetId);
+    if (!asset) return;
+    
+    const newName = prompt('새 이름을 입력하세요:', asset.name);
+    if (!newName || newName === asset.name) return;
+    
+    // 중복 검사
+    if (isNameDuplicate(newName, assetId)) {
+      const useUnique = confirm(`'${newName}' 이름이 이미 존재합니다.\n자동으로 고유한 이름을 생성할까요?`);
+      if (useUnique) {
+        const uniqueName = generateUniqueName(newName, assetId);
+        applyRename(assetId, uniqueName);
+      }
+      return;
+    }
+    
+    applyRename(assetId, newName);
+  }
+
+  function applyRename(assetId: string, newName: string) {
+    if (!data.assets || !(data.assets instanceof Map)) return;
+    
+    const assetData = data.assets.get(assetId);
+    if (!assetData) return;
+    
+    // 확장자 추출
+    const lastDot = newName.lastIndexOf('.');
+    const ext = lastDot > 0 ? newName.substring(lastDot + 1).toLowerCase() : assetData.ext;
+    const cleanName = lastDot > 0 ? newName.substring(0, lastDot) : newName;
+    
+    // 이름과 확장자 업데이트
+    assetData.name = cleanName.includes('.') ? cleanName : `${cleanName}.${ext}`;
+    assetData.ext = ext;
+    data.assets.set(assetId, assetData);
+    
+    // 변경 알림 (자동저장)
+    dispatch('change', data);
+    
+    // 뷰 갱신
+    assetList = getAssetList(data);
+    updateFilteredList();
+  }
+
+  // 에셋 교체 (새 파일로 기존 에셋 교체)
+  let replaceFileInput: HTMLInputElement;
+  let replaceTargetId: string = '';
+
+  function startReplaceAsset(assetId: string) {
+    replaceTargetId = assetId;
+    replaceFileInput?.click();
+  }
+
+  async function handleReplaceFile(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0 || !replaceTargetId) return;
+    
+    const file = input.files[0];
+    if (!data.assets || !(data.assets instanceof Map)) return;
+    
+    const assetData = data.assets.get(replaceTargetId);
+    if (!assetData) return;
+    
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      
+      // 확장자 추출
+      const fileName = file.name;
+      const lastDot = fileName.lastIndexOf('.');
+      const ext = lastDot > 0 ? fileName.substring(lastDot + 1).toLowerCase() : assetData.ext;
+      
+      // 데이터 업데이트 (이름은 유지, 데이터만 교체)
+      assetData.data = uint8Array;
+      assetData.ext = ext;
+      assetData.size = uint8Array.length;
+      
+      // dataUrl 재생성
+      const mime = getMimeType(ext);
+      const blob = new Blob([uint8Array], { type: mime });
+      assetData.dataUrl = URL.createObjectURL(blob);
+      
+      data.assets.set(replaceTargetId, assetData);
+      
+      // EXIF 캐시 무효화
+      exifCache.delete(replaceTargetId);
+      
+      // 변경 알림 (자동저장)
+      dispatch('change', data);
+      
+      // 뷰 갱신
+      assetList = getAssetList(data);
+      updateFilteredList();
+      
+      // 상세뷰에서 교체한 경우 EXIF 재로드
+      if (selectedId === replaceTargetId) {
+        const asset = assetList.find(a => a.id === replaceTargetId);
+        if (asset) {
+          loadExifData(asset);
+        }
+      }
+      
+      alert('에셋이 교체되었습니다.');
+    } catch (e) {
+      console.error('[AssetTab] Replace error:', e);
+      alert('에셋 교체 실패: ' + (e instanceof Error ? e.message : String(e)));
+    }
+    
+    // 입력 초기화
+    input.value = '';
+    replaceTargetId = '';
+  }
+
   $: selectedAsset = assetList.find((a) => a.id === selectedId);
 </script>
 
@@ -766,15 +1374,53 @@
       <button class="tool-btn" on:click={findDuplicates} title="중복 에셋 찾기">
         🔍 중복정리
       </button>
-      <div class="search-box">
-        <input 
-          type="text" 
-          placeholder="🔎 검색..." 
-          bind:value={searchQuery}
-        />
-        {#if searchQuery}
-          <button class="search-clear" on:click={() => searchQuery = ''}>×</button>
+      
+      <!-- 다운로드 버튼들 -->
+      <div class="download-group">
+        <button 
+          class="tool-btn" 
+          class:active={isMultiSelectMode}
+          on:click={toggleMultiSelect} 
+          title={isMultiSelectMode ? '선택 모드 종료' : '복수 선택 모드'}
+        >
+          {isMultiSelectMode ? '✓ 선택중' : '☑️ 복수선택'}
+        </button>
+        {#if isMultiSelectMode}
+          <button class="tool-btn" on:click={selectAllAssets} title="전체 선택">전체</button>
+          <button class="tool-btn" on:click={deselectAllAssets} title="선택 해제">해제</button>
+          <button 
+            class="tool-btn download" 
+            on:click={downloadSelectedAssets} 
+            title="선택 에셋 다운로드"
+            disabled={selectedAssetIds.size === 0}
+          >
+            ⬇️ {selectedAssetIds.size}개
+          </button>
+        {:else}
+          <button class="tool-btn" on:click={downloadAllAssets} title="전체 에셋 다운로드">
+            📦 전체 다운
+          </button>
         {/if}
+      </div>
+      
+      <div class="search-container">
+        <select class="search-mode" bind:value={searchMode} title="검색 모드">
+          <option value="name">📁 이름</option>
+          <option value="nai">🎨 NAI</option>
+          <option value="comfy">🔧 ComfyUI</option>
+        </select>
+        <div class="search-box">
+          <input 
+            type="text" 
+            placeholder={searchMode === 'name' ? '🔎 검색...' : searchMode === 'nai' ? '🔎 태그 검색 (쉼표로 AND)...' : '🔎 워크플로우 검색...'}
+            bind:value={searchQuery}
+          />
+          {#if isSearching}
+            <span class="search-loading">⏳</span>
+          {:else if searchQuery}
+            <button class="search-clear" on:click={() => searchQuery = ''}>×</button>
+          {/if}
+        </div>
       </div>
     </div>
     
@@ -787,6 +1433,14 @@
         multiple
         hidden
         on:change={handleFileUpload}
+      />
+      <!-- 에셋 교체용 숨김 인풋 -->
+      <input
+        bind:this={replaceFileInput}
+        type="file"
+        accept="image/*,audio/*,video/*"
+        hidden
+        on:change={handleReplaceFile}
       />
     </div>
   </div>
@@ -812,8 +1466,10 @@
           <div class="detail-header">
             <h3>{selectedAsset.name}</h3>
             <div class="detail-actions">
-              <button on:click={() => downloadAsset(selectedAsset)}>⬇️ 다운로드</button>
-              <button on:click={() => { deleteAsset(selectedAsset.id); closeDetailView(); }}>🗑️ 삭제</button>
+              <button on:click={() => downloadAsset(selectedAsset)} title="다운로드">⬇️</button>
+              <button on:click={() => renameAsset(selectedAsset.id)} title="이름변경">✏️</button>
+              <button on:click={() => startReplaceAsset(selectedAsset.id)} title="교체">🔄</button>
+              <button on:click={() => { deleteAsset(selectedAsset.id); closeDetailView(); }} title="삭제">🗑️</button>
             </div>
           </div>
           
@@ -867,7 +1523,7 @@
                         {#if naiData.width && naiData.height}<span>Size: {naiData.width}×{naiData.height}</span>{/if}
                       </div>
                     {:else if comfyRawData}
-                      <!-- 모델 정보 -->
+                      <!-- ComfyUI: 모델 정보만 표시 (프롬프트/네거티브는 워크플로우 뷰어에서 확인) -->
                       {#if comfyRawData.checkpoint || comfyRawData.vae || comfyRawData.loras?.length}
                         <div class="exif-field comfy-models">
                           <span class="exif-label">📦 모델:</span>
@@ -899,28 +1555,17 @@
                         </div>
                       {/if}
                       
-                      <!-- 프롬프트 -->
-                      <div class="exif-field">
-                        <span class="exif-label">프롬프트:</span>
-                        <pre>{comfyRawData.positive || '(없음)'}</pre>
-                      </div>
-                      <div class="exif-field">
-                        <span class="exif-label">네거티브:</span>
-                        <pre>{comfyRawData.negative || '(없음)'}</pre>
-                      </div>
-                      
-                      <!-- 파라미터 -->
+                      <!-- 주요 파라미터만 간단히 표시 -->
                       <div class="exif-params">
                         {#if comfyRawData.steps}<span>Steps: {comfyRawData.steps}</span>{/if}
                         {#if comfyRawData.cfg}<span>CFG: {comfyRawData.cfg}</span>{/if}
                         {#if comfyRawData.sampler}<span>Sampler: {comfyRawData.sampler}</span>{/if}
                         {#if comfyRawData.scheduler}<span>Scheduler: {comfyRawData.scheduler}</span>{/if}
                         {#if comfyRawData.seed}<span>Seed: {comfyRawData.seed}</span>{/if}
-                        {#if comfyRawData.denoise}<span>Denoise: {comfyRawData.denoise}</span>{/if}
                         {#if comfyRawData.width && comfyRawData.height}<span>Size: {comfyRawData.width}×{comfyRawData.height}</span>{/if}
                       </div>
                       
-                      <!-- 노드 목록 -->
+                      <!-- 워크플로우 뷰어와 노드 미리보기 -->
                       {#if comfyRawData.prompt && Object.keys(comfyRawData.prompt).length > 0}
                         <button class="open-comfy-viewer" on:click={() => showComfyViewer = true}>
                           🔧 워크플로우 뷰어 열기 ({Object.keys(comfyRawData.prompt).length} nodes)
@@ -979,9 +1624,22 @@
           <button
             class="gallery-item"
             class:selected={selectedId === asset.id}
-            on:click={() => selectAsset(asset.id)}
-            on:dblclick={() => openDetailView(asset.id)}
+            class:multi-selected={selectedAssetIds.has(asset.id)}
+            on:click={(e) => {
+              if (isMultiSelectMode) {
+                e.stopPropagation();
+                toggleAssetSelection(asset.id);
+              } else {
+                selectAsset(asset.id);
+              }
+            }}
+            on:dblclick={() => !isMultiSelectMode && openDetailView(asset.id)}
           >
+            {#if isMultiSelectMode}
+              <div class="multi-checkbox" class:checked={selectedAssetIds.has(asset.id)}>
+                {selectedAssetIds.has(asset.id) ? '✓' : ''}
+              </div>
+            {/if}
             <div class="gallery-thumb">
               {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(asset.ext) && asset.dataUrl}
                 <img
@@ -1022,6 +1680,9 @@
       <table class="list-view">
         <thead>
           <tr>
+            {#if isMultiSelectMode}
+              <th class="checkbox-header">☑</th>
+            {/if}
             <th>이름</th>
             <th>타입</th>
             <th>크기</th>
@@ -1032,9 +1693,23 @@
           {#each filteredAssetList as asset}
             <tr
               class:selected={selectedId === asset.id}
-              on:click={() => selectAsset(asset.id)}
-              on:dblclick={() => openDetailView(asset.id)}
+              class:multi-selected={selectedAssetIds.has(asset.id)}
+              on:click={(e) => {
+                if (isMultiSelectMode) {
+                  toggleAssetSelection(asset.id);
+                } else {
+                  selectAsset(asset.id);
+                }
+              }}
+              on:dblclick={() => !isMultiSelectMode && openDetailView(asset.id)}
             >
+              {#if isMultiSelectMode}
+                <td class="checkbox-cell">
+                  <div class="multi-checkbox" class:checked={selectedAssetIds.has(asset.id)}>
+                    {selectedAssetIds.has(asset.id) ? '✓' : ''}
+                  </div>
+                </td>
+              {/if}
               <td class="name-cell">
                 <span class="type-badge">{asset.type}</span>
                 {asset.name}
@@ -1044,6 +1719,8 @@
               <td class="action-cell">
                 <button on:click|stopPropagation={() => openDetailView(asset.id)} title="상세 보기">🔍</button>
                 <button on:click|stopPropagation={() => downloadAsset(asset)}>⬇️</button>
+                <button on:click|stopPropagation={() => renameAsset(asset.id)} title="이름변경">✏️</button>
+                <button on:click|stopPropagation={() => startReplaceAsset(asset.id)} title="교체">🔄</button>
                 <button on:click|stopPropagation={() => deleteAsset(asset.id)}>🗑️</button>
               </td>
             </tr>
@@ -1072,6 +1749,7 @@
           <button on:click={() => openDetailView(selectedAsset.id)}>🔍 상세</button>
           <button on:click={() => downloadAsset(selectedAsset)}>⬇️ 다운로드</button>
           <button on:click={() => deleteAsset(selectedAsset.id)}>🗑️ 삭제</button>
+          <button class="btn-close" on:click={() => selectedId = ''} title="선택 해제">✕ 닫기</button>
         </div>
       </div>
       
@@ -1260,6 +1938,53 @@
     color: var(--text-primary, #eee);
   }
   
+  .tool-btn.active {
+    background: #4caf50;
+    border-color: #4caf50;
+    color: #fff;
+  }
+  
+  .tool-btn.download {
+    background: #2196f3;
+    border-color: #2196f3;
+    color: #fff;
+  }
+  
+  .tool-btn.download:disabled {
+    background: var(--bg-tertiary, #333);
+    border-color: var(--border-color, #555);
+    color: var(--text-secondary, #888);
+    cursor: not-allowed;
+  }
+  
+  .download-group {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding-left: 8px;
+    border-left: 1px solid var(--border-color, #333);
+  }
+  
+  .search-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  
+  .search-mode {
+    padding: 0.375rem 0.5rem;
+    border: 1px solid var(--border-color, #333);
+    border-radius: 4px;
+    background: var(--bg-tertiary, #222);
+    color: var(--text-primary, #eee);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  
+  .search-mode:hover {
+    background: var(--bg-secondary, #333);
+  }
+  
   .search-box {
     position: relative;
     display: flex;
@@ -1272,11 +1997,11 @@
     border-radius: 4px;
     background: var(--bg-tertiary, #222);
     color: var(--text-primary, #eee);
-    width: 150px;
+    width: 180px;
     font-size: 0.75rem;
   }
   
-  .search-clear {
+  .search-clear, .search-loading {
     position: absolute;
     right: 4px;
     background: none;
@@ -1284,6 +2009,16 @@
     color: var(--text-secondary, #aaa);
     cursor: pointer;
     padding: 0 4px;
+  }
+  
+  .search-loading {
+    cursor: default;
+    animation: spin 1s linear infinite;
+  }
+  
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
 
   .btn-add {
@@ -1329,6 +2064,37 @@
   .gallery-item.selected {
     border-color: var(--primary, #0f3460);
     background: var(--bg-primary, #1a1a2e);
+  }
+
+  .gallery-item.multi-selected {
+    border-color: #4caf50;
+    background: rgba(76, 175, 80, 0.2);
+  }
+
+  .multi-checkbox {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-color, #555);
+    border-radius: 4px;
+    background: var(--bg-card, #16213e);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: #fff;
+    z-index: 1;
+  }
+
+  .multi-checkbox.checked {
+    background: #4caf50;
+    border-color: #4caf50;
+  }
+
+  .gallery-item {
+    position: relative;
   }
 
   .gallery-thumb {
@@ -1400,6 +2166,21 @@
     background: var(--primary, #0f3460);
   }
 
+  .list-view tr.multi-selected {
+    background: rgba(76, 175, 80, 0.2);
+  }
+
+  .checkbox-cell, .checkbox-header {
+    width: 40px;
+    text-align: center;
+  }
+
+  .checkbox-cell .multi-checkbox {
+    position: static;
+    display: inline-flex;
+    margin: 0 auto;
+  }
+
   .name-cell {
     display: flex;
     align-items: center;
@@ -1460,6 +2241,20 @@
     color: var(--text-primary, #eee);
     cursor: pointer;
     font-size: 0.75rem;
+  }
+  
+  .preview-actions button:hover {
+    background: var(--bg-tertiary, #222);
+  }
+  
+  .preview-actions .btn-close {
+    background: var(--error, #dc3545);
+    border-color: var(--error, #dc3545);
+    color: white;
+  }
+  
+  .preview-actions .btn-close:hover {
+    background: #c82333;
   }
 
   .preview-content {

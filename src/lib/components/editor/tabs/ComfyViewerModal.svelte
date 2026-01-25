@@ -14,20 +14,67 @@
   let selectedNodeId: string | null = null;
   let selectedTypeFilter: string | null = null;
   
-  // 카테고리 정의
-  const CATEGORIES = {
-    model: ['CheckpointLoaderSimple', 'CheckpointLoader', 'UNETLoader', 'LoraLoader', 'LoraLoaderModelOnly', 'VAELoader'],
-    sampler: ['KSampler', 'KSamplerAdvanced', 'SamplerCustom', 'SamplerCustomAdvanced'],
-    prompt: ['CLIPTextEncode', 'CLIPTextEncodeSDXL', 'ConditioningCombine', 'ConditioningConcat'],
-    latent: ['EmptyLatentImage', 'LatentUpscale', 'LatentComposite', 'LatentBlend'],
-    image: ['LoadImage', 'SaveImage', 'PreviewImage', 'ImageScale', 'ImageUpscaleWithModel'],
-    controlnet: ['ControlNetLoader', 'ControlNetApply', 'ControlNetApplyAdvanced'],
+  // 카테고리 키워드 패턴 (더 유연한 매칭)
+  const CATEGORY_PATTERNS = {
+    model: {
+      typePatterns: [
+        /checkpoint/i, /loader/i, /lora/i, /unet/i, /vae.*load/i, 
+        /efficient.*loader/i, /model.*merge/i, /ckpt/i
+      ],
+      inputPatterns: [/ckpt_name/i, /model_name/i, /lora_name/i, /vae_name/i],
+      valuePatterns: [/\.safetensors/i, /\.ckpt/i, /\.pt\b/i, /\.pth/i, /\.gguf/i]
+    },
+    sampler: {
+      typePatterns: [/ksampler/i, /sampler/i, /facedetailer/i, /scheduler/i],
+      inputPatterns: [/sampler_name/i, /scheduler/i, /steps/i, /cfg/i, /denoise/i],
+      valuePatterns: []
+    },
+    prompt: {
+      typePatterns: [
+        /cliptextencode/i, /text.*prompt/i, /conditioning/i, /string/i,
+        /primitive/i, /text.*box/i, /prompt/i
+      ],
+      inputPatterns: [/text/i, /positive/i, /negative/i, /prompt/i],
+      valuePatterns: []
+    },
+    image: {
+      typePatterns: [/loadimage/i, /saveimage/i, /previewimage/i, /image.*scale/i, /upscale/i],
+      inputPatterns: [/image/i, /pixels/i],
+      valuePatterns: []
+    },
+    latent: {
+      typePatterns: [/emptylatent/i, /latent/i, /vae.*decode/i, /vae.*encode/i],
+      inputPatterns: [/latent/i, /samples/i],
+      valuePatterns: []
+    },
+    controlnet: {
+      typePatterns: [/controlnet/i, /ipadapter/i, /instant.*id/i],
+      inputPatterns: [/control_net/i],
+      valuePatterns: []
+    },
   };
   
-  function getNodeCategory(classType: string): string {
-    for (const [cat, types] of Object.entries(CATEGORIES)) {
-      if (types.includes(classType)) return cat;
+  function getNodeCategory(classType: string, inputs?: Record<string, unknown>): string {
+    const inputsStr = inputs ? JSON.stringify(inputs).toLowerCase() : '';
+    const inputKeys = inputs ? Object.keys(inputs) : [];
+    
+    for (const [category, patterns] of Object.entries(CATEGORY_PATTERNS)) {
+      // class_type 패턴 매칭
+      if (patterns.typePatterns.some(p => p.test(classType))) {
+        return category;
+      }
+      
+      // input 키 패턴 매칭
+      if (patterns.inputPatterns.some(p => inputKeys.some(k => p.test(k)))) {
+        return category;
+      }
+      
+      // input 값 패턴 매칭 (모델 파일 등)
+      if (patterns.valuePatterns.some(p => p.test(inputsStr))) {
+        return category;
+      }
     }
+    
     return 'other';
   }
   
@@ -50,8 +97,46 @@
     classType: node.class_type,
     title: node._meta?.title,
     inputs: node.inputs,
-    category: getNodeCategory(node.class_type),
+    category: getNodeCategory(node.class_type, node.inputs),
+    preview: getNodePreview(node.class_type, node.inputs),
   })) : [];
+  
+  // 노드 미리보기 (주요 값 추출)
+  function getNodePreview(classType: string, inputs?: Record<string, unknown>): string {
+    if (!inputs) return '';
+    
+    // 모델 파일명
+    const modelKeys = ['ckpt_name', 'model_name', 'lora_name', 'vae_name', 'unet_name'];
+    for (const key of modelKeys) {
+      if (typeof inputs[key] === 'string') {
+        const val = inputs[key] as string;
+        // 파일명만 추출
+        return val.split(/[\/\\]/).pop() || val;
+      }
+    }
+    
+    // 샘플러 정보
+    if (inputs.sampler_name || inputs.scheduler) {
+      const parts = [];
+      if (inputs.sampler_name) parts.push(inputs.sampler_name);
+      if (inputs.scheduler) parts.push(inputs.scheduler);
+      if (inputs.steps) parts.push(`${inputs.steps}steps`);
+      return parts.join(' / ');
+    }
+    
+    // 프롬프트 텍스트
+    if (typeof inputs.text === 'string') {
+      const text = inputs.text as string;
+      return text.length > 50 ? text.slice(0, 50) + '...' : text;
+    }
+    
+    // 이미지 크기
+    if (inputs.width && inputs.height) {
+      return `${inputs.width}×${inputs.height}`;
+    }
+    
+    return '';
+  }
   
   // 타입별 그룹
   $: typeGroups = nodes.reduce((acc, node) => {
@@ -235,6 +320,9 @@
                   </div>
                   {#if node.title}
                     <div class="node-title">{node.title}</div>
+                  {/if}
+                  {#if node.preview}
+                    <div class="node-preview">{node.preview}</div>
                   {/if}
                 </button>
               {:else}
@@ -525,6 +613,16 @@
     font-size: 0.75rem;
     color: var(--text-secondary, #aaa);
     margin-top: 0.25rem;
+  }
+  
+  .node-preview {
+    font-size: 0.7rem;
+    color: var(--cat-color, #0af);
+    margin-top: 0.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.9;
   }
   
   /* 오른쪽 패널 */

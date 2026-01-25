@@ -202,6 +202,9 @@
     }
     
     // CCv3 assets 필드 처리 (card.data.assets)
+    // 이미 처리된 경로 추적 (중복 방지)
+    const processedPaths = new Set<string>();
+    
     if (cardData.assets && Array.isArray(cardData.assets)) {
       for (const asset of cardData.assets) {
         const uri = asset.uri;
@@ -211,6 +214,14 @@
           const fileName = asset.name || uri.split('/').pop() || 'unnamed';
           const ext = asset.ext || fileName.split('.').pop()?.toLowerCase() || '';
           const id = fileName;
+          
+          // URI에서 실제 경로 추출하여 추적
+          let realPath = uri;
+          if (uri.startsWith('embeded://')) realPath = uri.replace('embeded://', '');
+          else if (uri.startsWith('~risuasset:')) realPath = uri.replace('~risuasset:', '');
+          else if (uri.startsWith('__asset:')) realPath = uri.replace('__asset:', '');
+          processedPaths.add(realPath);
+          processedPaths.add(`assets/${realPath}`);
           
           if (!assetMap.has(id)) {
             assetMap.set(id, {
@@ -236,6 +247,14 @@
       
       if (assetData) {
         const id = assetName || rawFileName || assetPath;
+        
+        // 경로 추적
+        let realPath = assetPath;
+        if (assetPath.startsWith('embeded://')) realPath = assetPath.replace('embeded://', '');
+        else if (assetPath.startsWith('~risuasset:')) realPath = assetPath.replace('~risuasset:', '');
+        processedPaths.add(realPath);
+        processedPaths.add(`assets/${realPath}`);
+        
         if (!assetMap.has(id)) {
           assetMap.set(id, {
             id,
@@ -250,9 +269,15 @@
       }
     }
     
-    // ZIP 내 모든 파일 추가 (card.json 제외)
+    // ZIP 내 파일 추가 (card.json, x_meta/, 이미 처리된 경로 제외)
     for (const [path, data] of assets) {
       if (path === 'card.json') continue;
+      
+      // x_meta 폴더는 RisuAI 내부 메타데이터 폴더 - 에셋 아님
+      if (path.startsWith('x_meta/') || path.startsWith('x_meta\\')) continue;
+      
+      // 이미 cardData.assets나 additionalAssets에서 처리된 경로는 스킵
+      if (processedPaths.has(path)) continue;
       
       // 파일명과 확장자 추출
       const pathParts = path.split('/');

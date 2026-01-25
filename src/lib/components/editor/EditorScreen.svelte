@@ -83,6 +83,48 @@
     dispatch('download', editedData);
   }
 
+  // 메타데이터(card.json/module.json) 다운로드
+  function handleDownloadMetadata() {
+    if (!editedData) return;
+    
+    let jsonData: any;
+    let filename: string;
+    
+    if (fileType === 'charx') {
+      // charx: card 데이터 추출
+      jsonData = editedData.card || editedData.cardData || editedData;
+      filename = `${fileName.replace(/\.charx$/i, '')}_card.json`;
+    } else if (fileType === 'risum') {
+      // risum: module 데이터 추출
+      jsonData = editedData.module || editedData;
+      filename = `${fileName.replace(/\.risum$/i, '')}_module.json`;
+    } else if (fileType === 'risup') {
+      // risup: preset 데이터
+      jsonData = editedData.preset || editedData;
+      filename = `${fileName.replace(/\.risup$/i, '')}_preset.json`;
+    } else {
+      jsonData = editedData;
+      filename = `${fileName}_metadata.json`;
+    }
+    
+    // assets는 제외하고 내보내기 (너무 크므로)
+    const exportData = { ...jsonData };
+    if (exportData.assets instanceof Map) {
+      exportData.assets = `[Map with ${exportData.assets.size} entries]`;
+    }
+    
+    const jsonStr = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function handleClose() {
     if (hasChanges) {
       if (!confirm('저장하지 않은 변경사항이 있습니다. 닫으시겠습니까?')) {
@@ -109,6 +151,7 @@
       {/if}
     </div>
     <div class="header-actions">
+      <button class="btn btn-secondary" on:click={handleDownloadMetadata} title="메타데이터(JSON) 다운로드">📋 메타</button>
       <button class="btn btn-secondary" on:click={handleClose}>닫기</button>
       <button class="btn btn-primary" on:click={handleDownload}>다운로드</button>
     </div>

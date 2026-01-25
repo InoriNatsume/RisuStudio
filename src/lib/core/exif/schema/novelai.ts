@@ -133,37 +133,29 @@ function parseV4Prompt(value: unknown): string | null {
 function parseCharPrompts(obj: Record<string, unknown>): CharPrompt[] {
   const result: CharPrompt[] = [];
   
-  // char_captions (V4 스타일)
-  const charCaptions = obj.char_captions;
-  if (charCaptions && typeof charCaptions === 'object') {
-    if (Array.isArray(charCaptions)) {
-      // 배열 형태
-      for (const item of charCaptions) {
-        if (item && typeof item === 'object') {
-          const parsed = parseCharCaption(item as Record<string, unknown>);
-          if (parsed) result.push(parsed);
-        }
-      }
-    } else {
-      // 객체 형태 (키가 캐릭터 이름)
-      const entries = Object.entries(charCaptions as Record<string, unknown>);
-      for (const [name, value] of entries) {
-        if (value && typeof value === 'object') {
-          const parsed = parseCharCaption(value as Record<string, unknown>, name);
-          if (parsed) result.push(parsed);
+  // V4 스타일: v4_prompt.caption.char_captions
+  const v4Prompt = obj.v4_prompt;
+  if (v4Prompt && typeof v4Prompt === 'object') {
+    const v4 = v4Prompt as Record<string, unknown>;
+    const caption = v4.caption;
+    if (caption && typeof caption === 'object') {
+      const captionObj = caption as Record<string, unknown>;
+      const charCaptions = captionObj.char_captions;
+      if (Array.isArray(charCaptions)) {
+        for (let i = 0; i < charCaptions.length; i++) {
+          const item = charCaptions[i];
+          if (item && typeof item === 'object') {
+            const parsed = parseCharCaption(item as Record<string, unknown>, i);
+            if (parsed) result.push(parsed);
+          }
         }
       }
     }
-  }
-  
-  // v4_prompt 내의 use_coords (위치 정보)
-  const v4Prompt = obj.v4_prompt;
-  if (v4Prompt && typeof v4Prompt === 'object') {
-    const prompt = v4Prompt as Record<string, unknown>;
-    if (Array.isArray(prompt.use_coords)) {
-      // 위치 정보가 있으면 기존 char_prompts에 병합
-      for (let i = 0; i < prompt.use_coords.length && i < result.length; i++) {
-        const coords = prompt.use_coords[i];
+    
+    // use_coords에서 위치 정보 병합
+    if (Array.isArray(v4.use_coords)) {
+      for (let i = 0; i < v4.use_coords.length && i < result.length; i++) {
+        const coords = v4.use_coords[i];
         if (coords && typeof coords === 'object') {
           const c = coords as Record<string, unknown>;
           result[i].position = {
@@ -177,27 +169,55 @@ function parseCharPrompts(obj: Record<string, unknown>): CharPrompt[] {
     }
   }
   
+  // 결과가 있으면 반환
+  if (result.length > 0) return result;
+  
+  // Fallback: 루트 레벨 char_captions (구형 방식)
+  const charCaptions = obj.char_captions;
+  if (charCaptions && typeof charCaptions === 'object') {
+    if (Array.isArray(charCaptions)) {
+      for (let i = 0; i < charCaptions.length; i++) {
+        const item = charCaptions[i];
+        if (item && typeof item === 'object') {
+          const parsed = parseCharCaption(item as Record<string, unknown>, i);
+          if (parsed) result.push(parsed);
+        }
+      }
+    } else {
+      // 객체 형태 (키가 캐릭터 이름)
+      const entries = Object.entries(charCaptions as Record<string, unknown>);
+      let idx = 0;
+      for (const [name, value] of entries) {
+        if (value && typeof value === 'object') {
+          const parsed = parseCharCaption(value as Record<string, unknown>, idx, name);
+          if (parsed) result.push(parsed);
+          idx++;
+        }
+      }
+    }
+  }
+  
   return result;
 }
 
 /**
  * 개별 캐릭터 캡션 파싱
  */
-function parseCharCaption(obj: Record<string, unknown>, fallbackName?: string): CharPrompt | null {
-  // 캡션 추출
+function parseCharCaption(obj: Record<string, unknown>, index: number, fallbackName?: string): CharPrompt | null {
+  // 캡션 추출 - char_caption 우선 (NAI V4 표준)
   let caption = '';
-  if (typeof obj.caption === 'string') {
+  if (typeof obj.char_caption === 'string') {
+    caption = obj.char_caption;
+  } else if (typeof obj.caption === 'string') {
     caption = obj.caption;
   } else if (typeof obj.base_caption === 'string') {
     caption = obj.base_caption;
-  } else if (typeof obj.char_caption === 'string') {
-    caption = obj.char_caption;
   }
   
   if (!caption) return null;
   
   // 이름 추출
-  const name = parseString(obj.name) || parseString(obj.char_name) || fallbackName || 'Character';
+  const name = parseString(obj.name) || parseString(obj.char_name) || fallbackName || `Char ${index + 1}`;
   
   // 센터 좌표
   const centers = obj.centers as number[] | undefined;
