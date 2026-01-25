@@ -12,6 +12,90 @@
   // promptTemplate 배열 (프롬프트 순서와 내용)
   $: promptTemplate = preset.promptTemplate || [];
 
+  // Custom Toggles 파싱
+  $: customToggles = parseCustomToggles(preset.customToggles || '');
+  
+  // 현재 프롬프트에서 사용된 토글 변수들
+  $: usedToggles = extractUsedToggles(currentValue, customToggles);
+
+  interface ToggleInfo {
+    varName: string;
+    label: string;
+    type: 'select' | 'check' | 'divider' | 'group' | 'groupEnd';
+    options?: string[];
+  }
+
+  function parseCustomToggles(togglesText: string): Map<string, ToggleInfo> {
+    const toggleMap = new Map<string, ToggleInfo>();
+    if (!togglesText) return toggleMap;
+    
+    const lines = togglesText.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('=')) continue;
+      
+      // =변수명=라벨=타입=옵션들
+      const parts = trimmed.substring(1).split('=');
+      if (parts.length < 2) continue;
+      
+      const varName = parts[0];
+      const label = parts[1];
+      let type: ToggleInfo['type'] = 'check';
+      let options: string[] | undefined;
+      
+      if (parts.length >= 3) {
+        const typeStr = parts[2];
+        if (typeStr === 'select' && parts[3]) {
+          type = 'select';
+          options = parts[3].split(',');
+        } else if (typeStr === 'check') {
+          type = 'check';
+        } else if (typeStr === 'divider' || label === 'divider') {
+          type = 'divider';
+        } else if (typeStr === 'group' || label === 'group') {
+          type = 'group';
+        } else if (typeStr === 'groupEnd' || label === 'groupEnd') {
+          type = 'groupEnd';
+        }
+      } else if (label === 'divider') {
+        type = 'divider';
+      } else if (label === 'group') {
+        type = 'group';
+      } else if (label === 'groupEnd') {
+        type = 'groupEnd';
+      }
+      
+      toggleMap.set(varName, { varName, label, type, options });
+    }
+    return toggleMap;
+  }
+
+  function extractUsedToggles(text: string, toggleMap: Map<string, ToggleInfo>): ToggleInfo[] {
+    if (!text) return [];
+    
+    const used: ToggleInfo[] = [];
+    const seen = new Set<string>();
+    
+    // getglobalvar::toggle_XXX 패턴 추출
+    const regex = /\{\{(?:getglobalvar|getvar)::toggle_([^}\s]+)\}\}/g;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const varName = match[1];
+      if (seen.has(varName)) continue;
+      seen.add(varName);
+      
+      const toggle = toggleMap.get(varName);
+      if (toggle) {
+        used.push(toggle);
+      } else {
+        // 정의되지 않은 토글도 표시
+        used.push({ varName, label: varName, type: 'check' });
+      }
+    }
+    
+    return used;
+  }
+
   // 단순 프롬프트 필드들 (하단 섹션)
   const simplePromptFields = [
     { key: 'mainPrompt', label: '메인 프롬프트' },
@@ -257,6 +341,29 @@
         on:change={handleTextChange}
       />
     </div>
+    
+    <!-- 사용된 토글 패널 -->
+    {#if usedToggles.length > 0}
+      <div class="toggles-panel">
+        <div class="toggles-header">
+          <span class="toggles-title">📌 사용된 토글</span>
+          <span class="toggles-count">{usedToggles.length}개</span>
+        </div>
+        <div class="toggles-list">
+          {#each usedToggles as toggle}
+            <div class="toggle-item" class:undefined={!customToggles.has(toggle.varName)}>
+              <span class="toggle-var">toggle_{toggle.varName}</span>
+              <span class="toggle-label">{toggle.label}</span>
+              {#if toggle.type === 'select' && toggle.options}
+                <span class="toggle-options">{toggle.options.join(' | ')}</span>
+              {:else if toggle.type === 'check'}
+                <span class="toggle-type">체크</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </main>
 
   <!-- 우측: 템플릿 목록 패널 -->
@@ -404,6 +511,79 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
+  }
+
+  /* 사용된 토글 패널 */
+  .toggles-panel {
+    border-top: 1px solid var(--risu-theme-borderc, #444);
+    background: var(--risu-theme-darkbg, #252525);
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  .toggles-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    background: rgba(0, 0, 0, 0.2);
+    position: sticky;
+    top: 0;
+  }
+
+  .toggles-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--risu-theme-textcolor, #fff);
+  }
+
+  .toggles-count {
+    font-size: 0.7rem;
+    color: var(--risu-theme-textcolor2, #888);
+  }
+
+  .toggles-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .toggle-item {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(70, 130, 180, 0.2);
+    border: 1px solid rgba(70, 130, 180, 0.4);
+    border-radius: 4px;
+    font-size: 0.7rem;
+  }
+
+  .toggle-item.undefined {
+    background: rgba(255, 100, 100, 0.2);
+    border-color: rgba(255, 100, 100, 0.4);
+  }
+
+  .toggle-var {
+    color: #61AFEF;
+    font-family: monospace;
+    font-size: 0.65rem;
+  }
+
+  .toggle-label {
+    color: var(--risu-theme-textcolor, #fff);
+    font-weight: 500;
+  }
+
+  .toggle-options {
+    color: #98C379;
+    font-size: 0.65rem;
+  }
+
+  .toggle-type {
+    color: var(--risu-theme-textcolor2, #888);
+    font-size: 0.65rem;
   }
 
   .bookmark-panel {
