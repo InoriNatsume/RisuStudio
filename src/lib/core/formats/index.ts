@@ -13,7 +13,7 @@ export { BinaryReader, BinaryWriter } from './binary';
 export { encryptAesGcm, decryptAesGcm, encryptPreset, decryptPreset } from './crypto';
 
 // charx
-export { parseCharx, exportCharx, isCharxFile, normalizeToV3 } from './charx';
+export { parseCharx, exportCharx, isCharxFile, normalizeToV3, parsePng, parseJpeg, isPngFile, isJpegFile } from './charx';
 export type { CharxResult } from './charx';
 
 // risum

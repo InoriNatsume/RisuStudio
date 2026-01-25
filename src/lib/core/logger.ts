@@ -3,10 +3,15 @@
  * 로깅 시스템
  * 
  * 참조: RisuStudio_Specification.md Section 8.7
+ * 
+ * 개선 사항 (2026-01-25):
+ * - 모든 로그를 브라우저 콘솔에 출력 (개발 편의성)
+ * - 스키마 검증 실패 시 상세 로깅
+ * - 전역 접근 가능한 로거 (window.risuLogger)
  */
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
-export type LogCategory = 'charx' | 'risum' | 'risup' | 'cbs' | 'regex' | 'trigger' | 'validation' | 'app' | 'file';
+export type LogCategory = 'charx' | 'risum' | 'risup' | 'cbs' | 'regex' | 'trigger' | 'validation' | 'app' | 'file' | 'asset' | 'lorebook' | 'schema';
 
 export interface LogEntry {
   timestamp: number;
@@ -23,6 +28,7 @@ class Logger {
   private maxLogs = 1000;
   private listeners: Set<LogListener> = new Set();
   private enabled = true;
+  private verboseMode = true; // 기본으로 상세 모드 활성화
 
   log(level: LogLevel, category: LogCategory, message: string, data?: unknown): void {
     if (!this.enabled) return;
@@ -43,11 +49,43 @@ class Logger {
     // 리스너 알림
     this.listeners.forEach(fn => fn(entry));
 
-    // 개발 모드 또는 WARN/ERROR는 콘솔 출력
-    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV || level === 'WARN' || level === 'ERROR') {
-      const method = level === 'ERROR' ? 'error' : level === 'WARN' ? 'warn' : 'log';
-      console[method](`[${category}]`, message, data ?? '');
+    // 콘솔 출력 조건:
+    // - verboseMode: 모든 로그 출력
+    // - 아니면: WARN/ERROR만 출력
+    const shouldLog = this.verboseMode || level === 'WARN' || level === 'ERROR';
+    
+    if (shouldLog && typeof console !== 'undefined') {
+      const method = level === 'ERROR' ? 'error' : level === 'WARN' ? 'warn' : level === 'DEBUG' ? 'debug' : 'log';
+      const prefix = `[${category}]`;
+      const style = this.getStyle(level, category);
+      
+      if (data !== undefined) {
+        console[method](`%c${prefix}`, style, message, data);
+      } else {
+        console[method](`%c${prefix}`, style, message);
+      }
     }
+  }
+
+  private getStyle(level: LogLevel, category: LogCategory): string {
+    const colors: Record<LogLevel, string> = {
+      'DEBUG': '#888',
+      'INFO': '#4682B4',
+      'WARN': '#FFA500',
+      'ERROR': '#FF4444'
+    };
+    
+    const categoryColors: Partial<Record<LogCategory, string>> = {
+      'charx': '#9B59B6',
+      'risum': '#2ECC71',
+      'risup': '#E74C3C',
+      'asset': '#F39C12',
+      'lorebook': '#3498DB',
+      'schema': '#1ABC9C'
+    };
+    
+    const color = categoryColors[category] || colors[level];
+    return `color: ${color}; font-weight: bold;`;
   }
 
   debug(category: LogCategory, msg: string, data?: unknown): void {
@@ -64,6 +102,16 @@ class Logger {
 
   error(category: LogCategory, msg: string, data?: unknown): void {
     this.log('ERROR', category, msg, data);
+  }
+
+  // 스키마 검증 실패 시 상세 로깅
+  schemaError(category: LogCategory, field: string, expected: unknown, actual: unknown): void {
+    this.log('ERROR', 'schema', `스키마 불일치: ${category}.${field}`, {
+      field,
+      expected,
+      actual,
+      actualType: typeof actual
+    });
   }
 
   subscribe(fn: LogListener): () => void {

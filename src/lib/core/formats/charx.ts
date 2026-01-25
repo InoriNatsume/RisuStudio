@@ -161,3 +161,190 @@ export function normalizeToV3(card: CharacterCard): CharacterCardV3 {
     }
   };
 }
+
+/**
+ * PNG 캐릭터 카드 파싱
+ * PNG tEXt 청크에서 chara/ccv3 데이터 추출
+ */
+export async function parsePng(data: Uint8Array): Promise<CharxResult> {
+  logger.debug('png', '파싱 시작', { size: data.length });
+  
+  // PNG 시그니쳐 확인
+  const PNG_SIGNATURE = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+  for (let i = 0; i < 8; i++) {
+    if (data[i] !== PNG_SIGNATURE[i]) {
+      throw new CharxParseError('Invalid PNG: bad signature');
+    }
+  }
+  
+  let pos = 8;
+  let charaData: string | null = null;
+  const embeddedAssets = new Map<string, Uint8Array>();
+  
+  while (pos < data.length) {
+    const length = (data[pos] << 24) | (data[pos+1] << 16) | (data[pos+2] << 8) | data[pos+3];
+    pos += 4;
+    
+    const typeBytes = data.slice(pos, pos + 4);
+    const type = String.fromCharCode(...typeBytes);
+    pos += 4;
+    
+    if (type === 'tEXt') {
+      const chunkData = data.slice(pos, pos + length);
+      
+      // null 바이트 찾기
+      let nullPos = 0;
+      while (nullPos < Math.min(chunkData.length, 70) && chunkData[nullPos] !== 0) nullPos++;
+      
+      if (nullPos < chunkData.length && chunkData[nullPos] === 0) {
+        const keyword = new TextDecoder('latin1').decode(chunkData.slice(0, nullPos));
+        const value = new TextDecoder('latin1').decode(chunkData.slice(nullPos + 1));
+        
+        if (keyword === 'chara' || keyword === 'ccv3') {
+          charaData = value;
+          logger.debug('png', `Found '${keyword}' chunk`, { size: value.length });
+        } else if (keyword.startsWith('chara-ext-asset_')) {
+          const assetIndex = keyword.replace('chara-ext-asset_:', '').replace('chara-ext-asset_', '');
+          // Base64 디코딩
+          const binaryStr = atob(value);
+          const assetData = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i++) {
+            assetData[i] = binaryStr.charCodeAt(i);
+          }
+          embeddedAssets.set(assetIndex, assetData);
+        }
+      }
+    }
+    
+    pos += length;
+    pos += 4;  // CRC
+    
+    if (type === 'IEND') break;
+  }
+  
+  if (!charaData) {
+    throw new CharxParseError('Invalid PNG card: no chara/ccv3 tEXt chunk found');
+  }
+  
+  // Base64 디코딩
+  const jsonStr = atob(charaData);
+  const card = JSON.parse(jsonStr) as CharacterCardV3;
+  
+  // 에셋 매핑
+  const assets = new Map<string, Uint8Array>();
+  const nameCount = new Map<string, number>();
+  
+  // PNG 자체를 에셋으로 저장
+  assets.set('card_image.png', data);
+  
+  // card.data.assets에서 메타데이터 읽기
+  const assetMeta = (card.data as any)?.assets as Array<{
+    type: string;
+    uri: string;
+    name: string;
+    ext: string;
+  }> | undefined;
+  
+  if (assetMeta) {
+    for (const meta of assetMeta) {
+      if (meta.uri.startsWith('__asset:')) {
+        const assetIndex = meta.uri.replace('__asset:', '');
+        const assetData = embeddedAssets.get(assetIndex);
+        
+        if (assetData) {
+          const baseName = meta.name;
+          const ext = meta.ext || 'bin';
+          const baseKey = baseName.toLowerCase();
+          const count = nameCount.get(baseKey) || 0;
+          nameCount.set(baseKey, count + 1);
+          
+          const assetName = count === 0 
+            ? `${baseName}.${ext}` 
+            : `${baseName}{{${count}}}.${ext}`;
+          assets.set(assetName, assetData);
+        }
+      }
+    }
+  }
+  
+  logger.info('png', '파싱 완료', {
+    name: card.data?.name,
+    assetsCount: assets.size
+  });
+  
+  // 필요시 CCv3으로 정규화
+  const normalizedCard = card.spec === 'chara_card_v3' ? card : normalizeToV3(card);
+  
+  return {
+    card: normalizedCard,
+    assets,
+    raw: {}
+  };
+}
+
+/**
+ * JPEG 캐릭터 카드 (CharX-JPEG) 파싱
+ * JPEG 뒤에 붙은 ZIP 데이터에서 추출
+ */
+export async function parseJpeg(data: Uint8Array): Promise<CharxResult> {
+  logger.debug('jpeg', '파싱 시작', { size: data.length });
+  
+  // JPEG 시그니쳐 확인
+  if (!(data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF)) {
+    throw new CharxParseError('Invalid JPEG: bad signature');
+  }
+  
+  // ZIP 매직 넘버 찾기
+  let zipStart = -1;
+  for (let i = 0; i < data.length - 4; i++) {
+    if (data[i] === 0x50 && data[i+1] === 0x4B && 
+        data[i+2] === 0x03 && data[i+3] === 0x04) {
+      zipStart = i;
+      break;
+    }
+  }
+  
+  if (zipStart === -1) {
+    throw new CharxParseError('Invalid CharX-JPEG: no ZIP data found after JPEG');
+  }
+  
+  logger.debug('jpeg', 'ZIP 발견', { offset: zipStart });
+  
+  // JPEG 부분
+  const jpegImage = data.slice(0, zipStart);
+  
+  // ZIP 부분을 charx로 파싱
+  const zipData = data.slice(zipStart);
+  const result = await parseCharx(zipData);
+  
+  // JPEG 이미지를 에셋으로 추가
+  result.assets.set('card_image.jpg', jpegImage);
+  
+  logger.info('jpeg', '파싱 완료', {
+    name: result.card.data?.name,
+    assetsCount: result.assets.size
+  });
+  
+  return result;
+}
+
+/**
+ * PNG 파일인지 확인
+ */
+export function isPngFile(data: Uint8Array): boolean {
+  return data.length >= 8 &&
+    data[0] === 0x89 &&
+    data[1] === 0x50 &&
+    data[2] === 0x4E &&
+    data[3] === 0x47;
+}
+
+/**
+ * JPEG 파일인지 확인
+ */
+export function isJpegFile(data: Uint8Array): boolean {
+  return data.length >= 3 &&
+    data[0] === 0xFF &&
+    data[1] === 0xD8 &&
+    data[2] === 0xFF;
+}

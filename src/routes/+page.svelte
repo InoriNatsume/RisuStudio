@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { parseCharx, parseRisum, parseRisup, exportCharx, exportRisum, exportRisup, buildAssetMap } from '$lib/core';
+  import { parseCharx, parseRisum, parseRisup, exportCharx, exportRisum, exportRisup, buildAssetMap, parsePng, parseJpeg } from '$lib/core';
   import { logger } from '$lib/core/logger';
   import EditorScreen from '$lib/components/editor/EditorScreen.svelte';
   import { strFromU8 } from 'fflate';
 
   let fileData: any = null;
   let fileName = '';
-  let fileType: 'charx' | 'risum' | 'risup' | '' = '';
+  let fileType: 'charx' | 'risum' | 'risup' | 'png' | 'jpeg' | '' = '';
   let error = '';
   let isDragging = false;
   let loading = false;
@@ -15,13 +15,16 @@
   // 뷰 모드: 'drop' = 드롭존, 'json' = JSON 뷰어, 'edit' = 편집기
   let viewMode: 'drop' | 'json' | 'edit' = 'drop';
 
-  function getFileType(name: string): 'charx' | 'risum' | 'risup' | '' {
+  function getFileType(name: string): 'charx' | 'risum' | 'risup' | 'png' | 'jpeg' | '' {
     const ext = name.split('.').pop()?.toLowerCase();
     switch (ext) {
       case 'charx': return 'charx';
       case 'risum': return 'risum';
       case 'risup':
       case 'risupreset': return 'risup';
+      case 'png': return 'png';
+      case 'jpg':
+      case 'jpeg': return 'jpeg';
       default: return '';
     }
   }
@@ -469,6 +472,16 @@
           const charxResult = await parseCharx(data);
           fileData = transformCharxData(charxResult);
           break;
+        case 'png':
+          // PNG 카드 파싱
+          const pngResult = await parsePng(data);
+          fileData = transformCharxData(pngResult);
+          break;
+        case 'jpeg':
+          // JPEG 카드 (CharX-JPEG) 파싱
+          const jpegResult = await parseJpeg(data);
+          fileData = transformCharxData(jpegResult);
+          break;
         case 'risum':
           // risum은 변환 필요
           const risumResult = parseRisum(data);
@@ -670,10 +683,10 @@
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
         <p>Drop a file here or click to select</p>
-        <p class="supported">.charx, .risum, .risup, .risupreset</p>
+        <p class="supported">.charx, .png, .jpg, .risum, .risup</p>
         <input 
           type="file" 
-          accept=".charx,.risum,.risup,.risupreset" 
+          accept=".charx,.png,.jpg,.jpeg,.risum,.risup,.risupreset" 
           on:change={handleFileInput}
         />
       </div>
