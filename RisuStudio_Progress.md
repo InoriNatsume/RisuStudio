@@ -585,20 +585,16 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 
 ### 명령어
 ```bash
-# 프로젝트 생성
-pnpm create svelte@latest risustudio
-
 # 의존성 설치
-pnpm add fflate msgpackr
-pnpm add -D vitest @vitest/coverage-v8
+npm install
 
 # 테스트 실행
-pnpm test
-pnpm test:coverage
+npm test
+npm run test:coverage
 
 # 개발 서버
-pnpm dev
+npm run dev
 
 # 빌드
-pnpm build
+npm run build
 ```

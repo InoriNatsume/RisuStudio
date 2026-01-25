@@ -4,6 +4,25 @@
 
 ---
 
+## ⚠️ 중요: 봇 카드 PNG vs AI 이미지 PNG
+
+> 🚨 **가장 흔한 실수**: 봇 카드 파싱과 AI 이미지 EXIF 추출을 혼동함!
+
+| 구분 | 봇 카드 PNG | AI 이미지 PNG |
+|------|-------------|---------------|
+| **용도** | 캐릭터 데이터 저장 | AI 생성 이미지 |
+| **PNG 청크** | `chara`, `ccv3`, `chara-ext-asset_N` | `parameters`, `Comment`, `prompt`, `workflow` |
+| **파서** | `parsePng()` | `extractImageMetadata()` |
+| **사용 시점** | 파일 드롭 시 | 에셋 상세 보기 시 |
+
+**코드 위치**:
+- 봇 카드 파싱: `src/lib/core/formats/charx.ts`, `png.ts`
+- AI EXIF 추출: `src/lib/core/exif/` (NAI 스테가노그래피, ComfyUI 워크플로 등)
+
+자세한 내용: [gotchas.md](gotchas.md#봇-카드-vs-ai-이미지-exif-혼동)
+
+---
+
 ## 1. 지원 포맷
 
 | 확장자 | 구조 | 에셋 지원 | 파서 함수 |

@@ -7,13 +7,93 @@
 
 ## 목차
 
-1. [PNG/JPEG 확장자 처리 누락](#pngjpeg-확장자-처리-누락) ⭐ NEW
-2. [폴더 ID 형식](#폴더-id-형식) ⭐
-3. [에셋 타입 판별](#에셋-타입-판별) ⭐
-4. [에셋 URI 형식](#에셋-uri-형식)
-5. [Svelte 반응성 의존성](#svelte-반응성-의존성)
-6. [RPack WASM 필수](#rpack-wasm-필수)
-7. [프리셋 필드 오타](#프리셋-필드-오타)
+1. [봇 카드 vs AI 이미지 EXIF 혼동](#봇-카드-vs-ai-이미지-exif-혼동) ⭐⭐ CRITICAL
+2. [PNG/JPEG 확장자 처리 누락](#pngjpeg-확장자-처리-누락) ⭐ 
+3. [x_meta 폴더 처리](#x_meta-폴더-처리) ⭐ NEW
+4. [폴더 ID 형식](#폴더-id-형식) ⭐
+5. [에셋 타입 판별](#에셋-타입-판별) ⭐
+6. [에셋 URI 형식](#에셋-uri-형식)
+7. [Svelte 반응성 의존성](#svelte-반응성-의존성)
+8. [RPack WASM 필수](#rpack-wasm-필수)
+9. [프리셋 필드 오타](#프리셋-필드-오타)
+
+---
+
+## 봇 카드 vs AI 이미지 EXIF 혼동
+
+> ⚠️ **가장 흔한 실수**: 봇 카드 파싱과 AI 이미지 EXIF 추출을 혼동함
+
+### 두 가지는 완전히 다름!
+
+| 항목 | 봇 카드 파싱 | AI 이미지 EXIF 추출 |
+|------|-------------|---------------------|
+| **대상 파일** | `.charx`, `.png`, `.jpg` (봇 카드) | 에셋 폴더 내 이미지 |
+| **목적** | 캐릭터 데이터 추출 | AI 생성 메타데이터 추출 |
+| **PNG 청크** | `chara`, `ccv3`, `chara-ext-asset_N` | `parameters`, `Comment`, `prompt` |
+| **사용 함수** | `parseCharx()`, `parsePng()` | `extractImageMetadata()` |
+| **출력** | 로어북, Regex, Trigger, 에셋 | 프롬프트, 모델, 시드 등 |
+
+### 언제 어떤 것을 사용?
+
+```typescript
+// 1. 봇 카드 파싱 (사용자가 파일을 드롭할 때)
+async function handleFile(file: File) {
+  if (fileType === 'png') {
+    const result = await parsePng(data);  // tEXt에서 chara/ccv3 추출
+    fileData = transformCharxData(result);
+  }
+}
+
+// 2. AI 이미지 EXIF (에셋 내 이미지 상세 볼 때)
+async function showAssetExif(asset: AssetEntry) {
+  const meta = await extractImageMetadata(asset.data);  // EXIF/스테가노그래피 추출
+  // meta.modelKind === 'nai' | 'comfy' | 'a1111'
+}
+```
+
+### AI 이미지 메타데이터 소스
+
+| 소스 | 도구 | 추출 방법 |
+|------|------|----------|
+| **NAI** | NovelAI | Alpha 채널 LSB 스테가노그래피 |
+| **ComfyUI** | ComfyUI | PNG `prompt`, `workflow` 청크 |
+| **A1111** | AUTOMATIC1111 | PNG `parameters` 청크 / JPEG EXIF Comment |
+
+### 코드 위치
+
+- 봇 카드 파싱: `src/lib/core/formats/charx.ts`, `png.ts`
+- AI EXIF 추출: `src/lib/core/exif/extractor.ts`
+
+---
+
+## x_meta 폴더 처리
+
+### 문제
+
+CharX 파일 내 `x_meta/` 폴더의 JSON 파일들이 에셋으로 표시됨:
+
+```
+character.charx (ZIP)
+├── card.json
+├── assets/
+│   └── icon.png         # ✅ 에셋
+└── x_meta/              # ❌ 에셋 아님!
+    ├── 1.json
+    └── 2.json
+```
+
+### 해결책
+
+ZIP 파일 처리 시 `x_meta/` 경로 제외:
+
+```typescript
+for (const [path, data] of assets) {
+  // x_meta 폴더는 RisuAI 내부 메타데이터 - 에셋 아님!
+  if (path.startsWith('x_meta/') || path.startsWith('x_meta\\')) continue;
+  
+  // 에셋 처리...
+}
+```
 
 ---
 
@@ -166,7 +246,7 @@ asset.type === 'x-risu-asset'  // 또는 'icon', 'emotion' 등
 ```typescript
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'];
 const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'm4a', 'flac'];
-const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov'];
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'avi'];  // ⚠️ webm 포함!
 
 function getAssetMediaType(asset: { ext?: string; name?: string }): 'image' | 'audio' | 'video' | 'other' {
   const ext = (asset.ext || asset.name?.split('.').pop() || '').toLowerCase();
@@ -177,6 +257,8 @@ function getAssetMediaType(asset: { ext?: string; name?: string }): 'image' | 'a
   return 'other';
 }
 ```
+
+> ⚠️ **주의**: `webm`은 비디오 확장자! 누락하면 "미리보기 불가" 표시됨.
 
 ### 매직 바이트 검증 (선택)
 
@@ -206,35 +288,44 @@ function isImageByMagicBytes(data: Uint8Array): boolean {
 | `ccdefault:` | 기본값 (스킵) | - |
 | `embeded://` | ZIP 내 경로 | `embeded://assets/icon/image/icon.png` |
 | `__asset:N` | PNG 청크 인덱스 | `__asset:0`, `__asset:42` |
-| `~risuasset:hash:ext` | **캐시 해시 참조** | `~risuasset:abc123:png` |
+| `~risuasset:path` | **ZIP 내 에셋 경로** | `~risuasset:assets/icon.png` |
+| `~risuasset:hash:ext` | **캐시 해시 참조** (구버전) | `~risuasset:abc123:png` |
 | 외부 URL | 직접 URL | `https://example.com/img.png` |
 
 ### ~risuasset 처리
 
+> ⚠️ `~risuasset:`는 **두 가지 형식**이 있음!
+
 ```typescript
-function resolveAssetPath(uri: string, assetMap: Map<string, Uint8Array>): Uint8Array | null {
+function resolveAssetPath(uri: string, assetDict: Record<string, Uint8Array>): Uint8Array | null {
   if (uri.startsWith('ccdefault:')) return null;
   
   if (uri.startsWith('embeded://')) {
     const path = uri.replace('embeded://', '');
-    return assetMap.get(path) || null;
+    return assetDict[path] || assetDict[`assets/${path}`] || null;
   }
   
   if (uri.startsWith('__asset:')) {
     const index = uri.replace('__asset:', '');
-    return assetMap.get(`__asset/${index}`) || null;
+    return assetDict[`__asset/${index}`] || null;
   }
   
-  // ⚠️ 이 형식을 놓치기 쉬움!
+  // ⚠️ ~risuasset: 두 가지 형식!
   if (uri.startsWith('~risuasset:')) {
-    // hash와 ext 추출
-    const parts = uri.replace('~risuasset:', '').split(':');
-    const hash = parts[0];
-    // 해시로 에셋 맵에서 찾기
-    return assetMap.get(hash) || null;
+    const key = uri.replace('~risuasset:', '');
+    
+    // 1. 경로 형식: ~risuasset:assets/icon.png
+    if (key.includes('/')) {
+      return assetDict[key] || assetDict[key.replace('assets/', '')] || null;
+    }
+    
+    // 2. 해시:확장자 형식 (구버전): ~risuasset:abc123:png
+    const [hash] = key.split(':');
+    return assetDict[hash] || null;
   }
   
-  return null;
+  // 직접 경로
+  return assetDict[uri] || assetDict[`assets/${uri}`] || null;
 }
 ```
 
@@ -333,9 +424,11 @@ const penalty = preset.PresensePenalty;  // PresencePenalty 아님!
 
 | 항목 | 확인 |
 |------|:----:|
+| **봇 카드 파싱 vs AI EXIF 구분** | ☐ |
+| **x_meta 폴더 제외** | ☐ |
 | 폴더 ID에서 `\uf000folder:` prefix 처리 | ☐ |
-| 에셋 타입을 확장자로 판별 | ☐ |
-| `~risuasset:` URI 형식 지원 | ☐ |
+| 에셋 타입을 확장자로 판별 (webm 포함!) | ☐ |
+| `~risuasset:` URI 두 가지 형식 지원 | ☐ |
 | RPack WASM 사용 | ☐ |
 | Svelte $: 블록에서 명시적 의존성 | ☐ |
 | `PresensePenalty` 오타 처리 | ☐ |
