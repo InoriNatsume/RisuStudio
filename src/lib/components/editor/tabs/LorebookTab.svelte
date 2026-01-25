@@ -9,11 +9,27 @@
   $: lorebook = getLorebook(data);
   
   let selectedIndex = -1;
+  let selectedFolderId: string | null = null;  // 폴더 단위 선택
   let viewMode: 'dsl' | 'raw' = 'dsl';
   let dslText = '';
   let searchTerm = '';
   let dslEditor: DSLEditor;
+  let expandedFolders = new Set<string>();
+  let displayMode: 'all' | 'single' | 'folder' = 'all';  // 전체 / 개별 / 폴더 단위
+  let initialized = false;  // 초기화 플래그
+  
+  // 폴더는 기본적으로 접힌 상태 (초기화는 한 번만)
+  $: if (lorebook.length > 0 && !initialized) {
+    expandedFolders = new Set<string>();  // 모두 접힘
+    initialized = true;
+  }
 
+  // 폴더 구조로 그룹화
+  $: groupedLorebook = groupByFolders(lorebook);
+  
+  // 폴더 정보 추출
+  $: folders = lorebook.filter(e => e.mode === 'folder');
+  
   $: filteredList = lorebook.filter(entry => {
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
@@ -24,8 +40,31 @@
     );
   });
 
-  $: if (lorebook) {
-    dslText = lorebookToDSL(lorebook);
+  // DSL 텍스트: 선택 상태에 따라 전체 / 개별 / 폴더 단위 표시
+  $: {
+    const _mode = displayMode;
+    const _idx = selectedIndex;
+    const _folderId = selectedFolderId;
+    const _list = lorebook;
+    const _grouped = groupedLorebook;
+    
+    if (_mode === 'single' && _idx >= 0 && _idx < _list.length) {
+      // 개별 항목
+      dslText = lorebookToDSL([_list[_idx]]);
+      console.log('[LorebookTab] Single mode - showing entry:', _idx, _list[_idx]?.comment);
+    } else if (_mode === 'folder' && _folderId) {
+      // 폴더 단위 - 해당 폴더 내 모든 항목
+      const folder = _grouped.find(g => g.id === _folderId);
+      if (folder) {
+        const entries = folder.entries.map(e => e.entry);
+        dslText = lorebookToDSL(entries);
+        console.log('[LorebookTab] Folder mode - showing folder:', folder.name, 'with', entries.length, 'entries');
+      } else {
+        dslText = lorebookToDSL(_list);
+      }
+    } else {
+      dslText = lorebookToDSL(_list);
+    }
   }
 
   function getLorebook(data: any): any[] {
@@ -33,6 +72,90 @@
     if (data.module?.lorebook) return data.module.lorebook;
     if (data.lorebook) return data.lorebook;
     return [];
+  }
+
+  interface FolderGroup {
+    id: string | null;
+    name: string;
+    entries: { entry: any; originalIndex: number }[];
+  }
+
+  function groupByFolders(entries: any[]): FolderGroup[] {
+    const groups: FolderGroup[] = [];
+    const folderMap = new Map<string, FolderGroup>();
+    
+    console.log('[LorebookTab] groupByFolders 호출, 총 항목:', entries.length);
+    
+    // 1. 폴더 추출 (mode === 'folder')
+    entries.forEach((entry, idx) => {
+      if (entry.mode === 'folder') {
+        // 폴더 ID: entry.id 우선, 없으면 key에서 추출
+        let folderId = entry.id;
+        if (!folderId && entry.key) {
+          const match = entry.key.match(/\uf000folder:(.+)/);
+          if (match) folderId = match[1];
+        }
+        if (!folderId) folderId = `folder-${idx}`;
+        
+        console.log('[LorebookTab] 폴더 발견:', { folderId, name: entry.comment });
+        
+        folderMap.set(folderId, {
+          id: folderId,
+          name: entry.comment || '폴더',
+          entries: []
+        });
+      }
+    });
+    
+    console.log('[LorebookTab] 발견된 폴더 수:', folderMap.size, 'IDs:', [...folderMap.keys()]);
+    
+    // 2. 루트 그룹 (폴더에 속하지 않은 항목)
+    const rootGroup: FolderGroup = { id: null, name: '(루트)', entries: [] };
+    
+    // 3. 항목 분류
+    entries.forEach((entry, idx) => {
+      if (entry.mode === 'folder') return; // 폴더 자체는 제외
+      
+      let parentFolder = entry.folder;
+      
+      // \uf000folder:UUID 형식에서 UUID만 추출
+      if (parentFolder && parentFolder.includes('folder:')) {
+        const match = parentFolder.match(/folder:(.+)/);
+        if (match) parentFolder = match[1];
+      }
+      
+      if (parentFolder && folderMap.has(parentFolder)) {
+        folderMap.get(parentFolder)!.entries.push({ entry, originalIndex: idx });
+      } else {
+        // 폴더가 지정됐지만 찾을 수 없는 경우 디버그
+        if (entry.folder) {
+          console.log('[LorebookTab] 폴더 매칭 실패:', { entryName: entry.comment, originalFolder: entry.folder, extractedId: parentFolder, availableFolders: [...folderMap.keys()] });
+        }
+        rootGroup.entries.push({ entry, originalIndex: idx });
+      }
+    });
+    
+    // 4. 폴더 먼저, 그다음 루트
+    folderMap.forEach(folder => {
+      groups.push(folder);
+    });
+    if (rootGroup.entries.length > 0) {
+      groups.push(rootGroup);
+    }
+    
+    console.log('[LorebookTab] 최종 그룹:', groups.map(g => ({ name: g.name, count: g.entries.length })));
+    
+    return groups;
+  }
+
+  function toggleFolder(folderId: string | null) {
+    if (folderId === null) return;
+    if (expandedFolders.has(folderId)) {
+      expandedFolders.delete(folderId);
+    } else {
+      expandedFolders.add(folderId);
+    }
+    expandedFolders = new Set(expandedFolders);
   }
 
   function lorebookToDSL(entries: any[]): string {
@@ -110,8 +233,37 @@
   }
 
   function selectEntry(index: number) {
-    selectedIndex = index;
-    scrollToEntry(index);
+    if (selectedIndex === index && displayMode === 'single') {
+      // 같은 항목 다시 클릭 시 선택 해제
+      selectedIndex = -1;
+      selectedFolderId = null;
+      displayMode = 'all';
+    } else {
+      selectedIndex = index;
+      selectedFolderId = null;
+      displayMode = 'single';  // 개별 보기 모드로 전환
+    }
+  }
+
+  function selectFolder(folderId: string | null, folderName: string) {
+    if (folderId === null) return;  // 루트는 선택 불가
+    
+    if (selectedFolderId === folderId && displayMode === 'folder') {
+      // 같은 폴더 다시 클릭 시 선택 해제
+      selectedFolderId = null;
+      selectedIndex = -1;
+      displayMode = 'all';
+    } else {
+      selectedFolderId = folderId;
+      selectedIndex = -1;
+      displayMode = 'folder';
+    }
+  }
+
+  function showAll() {
+    selectedIndex = -1;
+    selectedFolderId = null;
+    displayMode = 'all';
   }
 
   async function scrollToEntry(index: number) {
@@ -160,8 +312,33 @@
 
   function applyDSL() {
     try {
-      const newList = dslToLorebook(dslText);
-      updateLorebook(newList);
+      const parsed = dslToLorebook(dslText);
+      
+      if (displayMode === 'single' && selectedIndex >= 0 && parsed.length === 1) {
+        // 개별 모드: 선택된 항목만 업데이트
+        const newList = [...lorebook];
+        newList[selectedIndex] = parsed[0];
+        updateLorebook(newList);
+      } else if (displayMode === 'folder' && selectedFolderId) {
+        // 폴더 모드: 해당 폴더 내 항목들만 업데이트
+        const folder = groupedLorebook.find(g => g.id === selectedFolderId);
+        if (folder) {
+          const newList = [...lorebook];
+          // 폴더 내 항목들의 인덱스 가져오기
+          const indices = folder.entries.map(e => e.originalIndex).sort((a, b) => b - a);
+          // 역순으로 삭제 후 새 항목 삽입
+          for (const idx of indices) {
+            newList.splice(idx, 1);
+          }
+          // 첫 위치에 새 항목들 삽입
+          const insertIdx = Math.min(...folder.entries.map(e => e.originalIndex));
+          newList.splice(insertIdx, 0, ...parsed);
+          updateLorebook(newList);
+        }
+      } else {
+        // 전체 모드: 전체 목록 교체
+        updateLorebook(parsed);
+      }
     } catch (e) {
       console.error('DSL 파싱 오류:', e);
       alert('DSL 파싱 오류');
@@ -189,6 +366,19 @@
       <div class="toolbar-left">
         <button class="mode-btn" class:active={viewMode === 'dsl'} on:click={() => viewMode = 'dsl'}>DSL</button>
         <button class="mode-btn" class:active={viewMode === 'raw'} on:click={() => viewMode = 'raw'}>Raw</button>
+        <span class="separator">|</span>
+        {#if displayMode === 'single' && selectedIndex >= 0}
+          <button class="mode-btn active-item" on:click={showAll}>
+            📄 {lorebook[selectedIndex]?.comment || '선택됨'} ×
+          </button>
+        {:else if displayMode === 'folder' && selectedFolderId}
+          {@const folder = groupedLorebook.find(g => g.id === selectedFolderId)}
+          <button class="mode-btn active-item folder-item" on:click={showAll}>
+            📂 {folder?.name || '폴더'} ({folder?.entries.length || 0}개) ×
+          </button>
+        {:else}
+          <span class="view-label">전체 {lorebook.length}개</span>
+        {/if}
       </div>
       <div class="toolbar-right">
         <button class="tool-btn" on:click={copyToClipboard} title="복사">📋</button>
@@ -224,33 +414,88 @@
     </div>
     
     <ul class="entry-list">
-      {#each filteredList as entry, i}
-        {@const originalIndex = lorebook.indexOf(entry)}
-        <li
-          class="entry-item"
-          class:selected={selectedIndex === originalIndex}
-          class:always-active={entry.alwaysActive}
-          on:click={() => selectEntry(originalIndex)}
-          on:keydown={(e) => e.key === 'Enter' && selectEntry(originalIndex)}
-          role="button"
-          tabindex="0"
-        >
-          <div class="entry-info">
-            <span class="entry-name">{entry.comment || entry.key || '(이름 없음)'}</span>
-            <span class="entry-key">{entry.key?.slice(0, 30) || ''}</span>
-          </div>
-          <button class="btn-delete" on:click|stopPropagation={() => deleteEntry(originalIndex)} title="삭제">×</button>
-        </li>
-      {/each}
+      {#if searchTerm}
+        <!-- 검색 모드: 플랫 리스트 -->
+        {#each filteredList as entry, i}
+          {@const originalIndex = lorebook.indexOf(entry)}
+          <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+          <li
+            class="entry-item"
+            class:selected={selectedIndex === originalIndex}
+            class:always-active={entry.alwaysActive}
+            on:click={() => selectEntry(originalIndex)}
+            on:keydown={(e) => e.key === 'Enter' && selectEntry(originalIndex)}
+          >
+            <div class="entry-info">
+              <span class="entry-name">{entry.comment || entry.key || '(이름 없음)'}</span>
+              <span class="entry-key">{entry.key?.slice(0, 30) || ''}</span>
+            </div>
+            <button class="btn-delete" on:click|stopPropagation={() => deleteEntry(originalIndex)} title="삭제">×</button>
+          </li>
+        {/each}
+      {:else}
+        <!-- 폴더 모드: 그룹화된 리스트 -->
+        {#each groupedLorebook as group}
+          {#if group.id !== null}
+            <!-- 폴더 헤더 -->
+            <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+            <li
+              class="folder-header"
+              class:expanded={expandedFolders.has(group.id)}
+              class:folder-selected={selectedFolderId === group.id && displayMode === 'folder'}
+            >
+              <button 
+                class="folder-toggle" 
+                on:click|stopPropagation={() => toggleFolder(group.id)}
+                title={expandedFolders.has(group.id) ? '접기' : '펼치기'}
+              >
+                {expandedFolders.has(group.id) ? '▼' : '▶'}
+              </button>
+              <button 
+                class="folder-select"
+                on:click|stopPropagation={() => selectFolder(group.id, group.name)}
+                title="이 폴더만 보기"
+              >
+                <span class="folder-icon">{expandedFolders.has(group.id) ? '📂' : '📁'}</span>
+                <span class="folder-name">{group.name}</span>
+                <span class="folder-count">({group.entries.length})</span>
+              </button>
+            </li>
+          {/if}
+          
+          <!-- 폴더 내 항목들 (루트거나 확장된 폴더일 때만 표시) -->
+          {#if group.id === null || expandedFolders.has(group.id)}
+            {#each group.entries as { entry, originalIndex }}
+              <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+              <li
+                class="entry-item"
+                class:nested={group.id !== null}
+                class:selected={selectedIndex === originalIndex}
+                class:always-active={entry.alwaysActive}
+                on:click={() => selectEntry(originalIndex)}
+                on:keydown={(e) => e.key === 'Enter' && selectEntry(originalIndex)}
+              >
+                <div class="entry-info">
+                  <span class="entry-name">{entry.comment || entry.key || '(이름 없음)'}</span>
+                  <span class="entry-key">{entry.key?.slice(0, 30) || ''}</span>
+                </div>
+                <button class="btn-delete" on:click|stopPropagation={() => deleteEntry(originalIndex)} title="삭제">×</button>
+              </li>
+            {/each}
+          {/if}
+        {/each}
+      {/if}
       
-      {#if filteredList.length === 0}
-        <li class="empty-message">{searchTerm ? '검색 결과 없음' : '로어북이 없습니다'}</li>
+      {#if filteredList.length === 0 && searchTerm}
+        <li class="empty-message">검색 결과 없음</li>
+      {:else if lorebook.length === 0}
+        <li class="empty-message">로어북이 없습니다</li>
       {/if}
     </ul>
     
     <div class="panel-footer">
       <button class="btn-add" on:click={addEntry}>+ 추가</button>
-      <span class="count">총 {lorebook.length}개</span>
+      <span class="count">총 {lorebook.length}개 {folders.length > 0 ? `(${folders.length}폴더)` : ''}</span>
     </div>
   </aside>
 </div>
@@ -281,7 +526,27 @@
     border-bottom: 1px solid var(--risu-theme-borderc, #444);
   }
 
-  .toolbar-left, .toolbar-right { display: flex; gap: 0.25rem; }
+  .toolbar-left, .toolbar-right { display: flex; gap: 0.25rem; align-items: center; }
+
+  .separator {
+    color: var(--risu-theme-textcolor2, #666);
+    margin: 0 0.25rem;
+  }
+
+  .view-label {
+    font-size: 0.75rem;
+    color: var(--risu-theme-textcolor2, #888);
+  }
+
+  .active-item {
+    background: #4682B4 !important;
+    color: white !important;
+    border-color: #4682B4 !important;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .mode-btn {
     padding: 0.375rem 0.75rem;
@@ -486,4 +751,89 @@
   }
 
   .count { color: var(--risu-theme-textcolor2, #888); }
+
+  /* 폴더 스타일 */
+  .folder-header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 4px 6px;
+    transition: all 0.15s;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 6px;
+    font-size: 0.8125rem;
+  }
+
+  .folder-header:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--risu-theme-primary-600, #4682B4);
+  }
+
+  .folder-header.expanded {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
+  }
+
+  .folder-header.folder-selected {
+    background: rgba(70, 130, 180, 0.2);
+    border-color: var(--risu-theme-primary-600, #4682B4);
+  }
+
+  .folder-toggle {
+    background: none;
+    border: none;
+    color: var(--risu-theme-textcolor2, #888);
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 0.625rem;
+  }
+
+  .folder-toggle:hover {
+    color: var(--risu-theme-textcolor, #fff);
+  }
+
+  .folder-select {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    text-align: left;
+  }
+
+  .folder-select:hover .folder-name {
+    color: var(--risu-theme-primary-600, #4682B4);
+  }
+
+  .folder-icon {
+    font-size: 1rem;
+  }
+
+  .folder-name {
+    flex: 1;
+    color: var(--risu-theme-textcolor, #fff);
+    font-weight: 500;
+  }
+
+  .folder-count {
+    color: var(--risu-theme-textcolor2, #888);
+    font-size: 0.6875rem;
+  }
+
+  .folder-item {
+    background: #2d5a7b !important;
+  }
+
+  /* 폴더 내 중첩된 항목 */
+  .entry-item.nested {
+    margin-left: 1rem;
+    border-left: 2px solid var(--risu-theme-borderc, #444);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
 </style>

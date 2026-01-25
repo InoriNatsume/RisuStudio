@@ -69,18 +69,54 @@
     }
     
     // 로어북 변환 (character_book → globalLore 형식)
+    // RisuAI 폴더 구조 지원: mode='folder', folder=<parentFolderId>
     const lorebook: any[] = [];
     const charbook = cardData.character_book;
+    console.log('[charx] character_book 구조:', charbook);
+    
     if (charbook?.entries) {
       const entries = Array.isArray(charbook.entries) ? charbook.entries : Object.values(charbook.entries);
+      
+      // 디버그: 첫 5개 엔트리 구조 확인
+      console.log('[charx] 첫 5개 로어북 엔트리:', entries.slice(0, 5).map((e: any) => ({
+        name: e.name || e.comment,
+        mode: e.mode,
+        folder: e.folder,
+        keys: e.keys
+      })));
+      
       for (const book of entries) {
+        // RisuAI CCv3: mode와 folder가 entry 레벨에 직접 저장됨
+        const isFolder = book.mode === 'folder';
+        const parentFolderId = book.folder;  // 부모 폴더 ID (이 항목이 속한 폴더)
+        
+        // 이 항목의 고유 ID 결정
+        // 폴더인 경우: id 또는 key에서 UUID 추출
+        let entryId = book.id;
+        if (isFolder) {
+          // 방법 1: 이미 id가 있으면 그것 사용
+          // 방법 2: keys에서 \uf000folder:UUID 추출
+          if (!entryId && book.keys && book.keys.length > 0) {
+            const folderKeyMatch = book.keys[0]?.match?.(/\uf000folder:(.+)/);
+            if (folderKeyMatch) {
+              entryId = folderKeyMatch[1];
+            }
+          }
+          // 방법 3: name 기반 fallback
+          if (!entryId) {
+            entryId = `folder-${book.name || book.comment || Math.random().toString(36).slice(2)}`;
+          }
+        }
+        
         lorebook.push({
+          id: entryId,
           key: book.keys?.join(', ') ?? '',
           secondkey: book.secondary_keys?.join(', ') ?? '',
           insertorder: book.insertion_order ?? 0,
           comment: book.name ?? book.comment ?? '',
           content: book.content ?? '',
-          mode: 'normal',
+          mode: book.mode || 'normal',  // 'folder' | 'normal' | 'constant' 등
+          folder: parentFolderId,  // 부모 폴더 ID (이 항목이 속한 폴더)
           alwaysActive: book.constant ?? false,
           selective: book.selective ?? false,
           useRegex: book.use_regex ?? false,
@@ -88,6 +124,11 @@
         });
       }
     }
+    
+    // 폴더 구조 디버그
+    const folders = lorebook.filter(e => e.mode === 'folder');
+    const itemsWithFolder = lorebook.filter(e => e.folder);
+    console.log('[charx] 폴더 수:', folders.length, '폴더 내 항목:', itemsWithFolder.length);
     
     // Regex 변환 - 여러 가능한 경로에서 탐색
     // 1. module.risum이 있으면 그 안의 regex 사용
@@ -131,16 +172,26 @@
     function resolveAssetPath(uri: string): Uint8Array | null {
       if (!uri) return null;
       
+      console.log('[resolveAssetPath] 해석 시도:', uri, 'assetDict keys:', Object.keys(assetDict).slice(0, 5));
+      
       // __asset: 경로
       if (uri.startsWith('__asset:')) {
         const key = uri.replace('__asset:', '');
         return assetDict[key] || assetDict[`assets/${key}`] || null;
       }
       
-      // embeded:// 경로
+      // embeded:// 경로 (RisuAI 구버전)
       if (uri.startsWith('embeded://')) {
         const key = uri.replace('embeded://', '');
         return assetDict[key] || assetDict[`assets/${key}`] || null;
+      }
+      
+      // ~risuasset: 경로 (RisuAI 최신 포맷)
+      if (uri.startsWith('~risuasset:')) {
+        // ~risuasset:assets/filename.ext 형식
+        const key = uri.replace('~risuasset:', '');
+        console.log('[resolveAssetPath] ~risuasset 경로:', key);
+        return assetDict[key] || assetDict[key.replace('assets/', '')] || null;
       }
       
       // 직접 경로
@@ -225,6 +276,20 @@
     
     console.log('[charx] assetMap size:', assetMap.size, 'first 5 keys:', Array.from(assetMap.keys()).slice(0, 5));
     
+    // 디버그: 첫 에셋의 dataUrl 상태 확인
+    const firstAsset = assetMap.values().next().value;
+    if (firstAsset) {
+      console.log('[charx] First asset check:', {
+        id: firstAsset.id,
+        name: firstAsset.name,
+        ext: firstAsset.ext,
+        type: firstAsset.type,
+        dataSize: firstAsset.data?.length,
+        dataUrlLen: firstAsset.dataUrl?.length,
+        dataUrlStart: firstAsset.dataUrl?.slice(0, 80)
+      });
+    }
+    
     return {
       card,
       cardData,
@@ -284,13 +349,24 @@
   }
   
   /**
-   * AssetGod 방식: magic bytes 우선, 확장자 폴백으로 MIME 타입 결정
+   * AssetGod 방식: Blob URL 생성 (base64보다 훨씬 효율적)
+   * magic bytes 우선, 확장자 폴백으로 MIME 타입 결정
    */
   function createDataUrl(data: Uint8Array, ext: string): string {
+    if (!data || data.length === 0) return '';
+    
+    // SSR 환경 체크 - 브라우저에서만 Blob URL 생성 가능
+    if (typeof window === 'undefined' || typeof Blob === 'undefined') {
+      console.log('[createDataUrl] SSR 환경 - 스킵');
+      return '';
+    }
+    
     // 1. magic bytes로 이미지 포맷 감지 시도
     const detectedFormat = detectImageFormat(data);
     
-    // 2. 감지된 포맷이 있으면 해당 MIME 사용
+    // 2. MIME 타입 결정 (감지된 포맷 우선, 확장자 폴백)
+    let mimeType: string;
+    
     if (detectedFormat) {
       const formatMimeMap: Record<string, string> = {
         'png': 'image/png',
@@ -300,47 +376,43 @@
         'avif': 'image/avif',
         'bmp': 'image/bmp'
       };
-      const mimeType = formatMimeMap[detectedFormat] || 'image/png';
-      const base64 = uint8ArrayToBase64(data);
-      return `data:${mimeType};base64,${base64}`;
+      mimeType = formatMimeMap[detectedFormat] || 'image/png';
+    } else {
+      // 확장자 기반 폴백
+      const mimeTypes: Record<string, string> = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'webp': 'image/webp',
+        'avif': 'image/avif',
+        'bmp': 'image/bmp',
+        'mp3': 'audio/mpeg',
+        'wav': 'audio/wav',
+        'ogg': 'audio/ogg',
+        'mp4': 'video/mp4',
+        'webm': 'video/webm',
+        'json': 'application/json',
+        'css': 'text/css',
+        'ttf': 'font/ttf',
+        'otf': 'font/otf',
+        'woff': 'font/woff',
+        'woff2': 'font/woff2'
+      };
+      mimeType = mimeTypes[ext] || 'application/octet-stream';
     }
     
-    // 3. 확장자 기반 폴백
-    const mimeTypes: Record<string, string> = {
-      'png': 'image/png',
-      'jpg': 'image/jpeg',
-      'jpeg': 'image/jpeg',
-      'gif': 'image/gif',
-      'webp': 'image/webp',
-      'avif': 'image/avif',
-      'bmp': 'image/bmp',
-      'mp3': 'audio/mpeg',
-      'wav': 'audio/wav',
-      'ogg': 'audio/ogg',
-      'mp4': 'video/mp4',
-      'webm': 'video/webm',
-      'json': 'application/json',
-      'css': 'text/css',
-      'ttf': 'font/ttf',
-      'otf': 'font/otf',
-      'woff': 'font/woff',
-      'woff2': 'font/woff2'
-    };
-    
-    const mimeType = mimeTypes[ext] || 'application/octet-stream';
-    const base64 = uint8ArrayToBase64(data);
-    return `data:${mimeType};base64,${base64}`;
-  }
-  
-  function uint8ArrayToBase64(bytes: Uint8Array): string {
-    // 큰 파일 처리를 위한 청크 방식 (AssetGod 참조)
-    const chunkSize = 8192;
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i += chunkSize) {
-      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.byteLength));
-      binary += String.fromCharCode.apply(null, Array.from(chunk));
+    // 3. Blob URL 생성 (AssetGod 방식 - base64보다 효율적)
+    try {
+      // AssetGod과 동일하게 직접 Uint8Array 전달
+      const blob = new Blob([data], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      console.log('[createDataUrl] 생성됨:', { ext, mimeType, detectedFormat, dataLen: data.length, urlStart: url.slice(0, 50) });
+      return url;
+    } catch (e) {
+      console.error('Failed to create blob URL:', e);
+      return '';
     }
-    return btoa(binary);
   }
 
   /**

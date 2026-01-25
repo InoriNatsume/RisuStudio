@@ -12,9 +12,24 @@
   let viewMode: 'dsl' | 'raw' = 'dsl';
   let dslText = '';
   let searchTerm = '';
+  let typeFilter = 'all';  // 타입 필터
   let dslEditor: DSLEditor;
+  let displayMode: 'all' | 'single' = 'all';  // 전체 보기 vs 개별 보기
+
+  // Regex 타입 목록 (RisuAI 스키마)
+  const regexTypes = [
+    { value: 'all', label: '전체' },
+    { value: 'editinput', label: '입력 편집' },
+    { value: 'editoutput', label: '출력 편집' },
+    { value: 'editdisplay', label: '디스플레이 편집' },
+    { value: 'editprocess', label: '프로세스 편집' },
+    { value: 'edittrans', label: '번역 편집' },
+  ];
 
   $: filteredList = regexList.filter(entry => {
+    // 타입 필터
+    if (typeFilter !== 'all' && entry.type !== typeFilter) return false;
+    // 검색 필터
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
     return (
@@ -23,8 +38,20 @@
     );
   });
 
-  $: if (regexList) {
-    dslText = regexToDSL(regexList);
+  // DSL 텍스트: 선택 상태에 따라 전체 또는 개별 표시
+  // displayMode와 selectedIndex를 명시적으로 참조하여 reactive 트리거
+  $: {
+    const _mode = displayMode;
+    const _idx = selectedIndex;
+    const _list = regexList;
+    
+    if (_mode === 'single' && _idx >= 0 && _idx < _list.length) {
+      dslText = regexToDSL([_list[_idx]]);
+      console.log('[RegexTab] Single mode - showing entry:', _idx, _list[_idx]?.comment);
+    } else {
+      dslText = regexToDSL(_list);
+      console.log('[RegexTab] All mode - showing all:', _list.length, 'entries');
+    }
   }
 
   function getRegexList(data: any): any[] {
@@ -127,8 +154,19 @@
   }
 
   function selectEntry(index: number) {
-    selectedIndex = index;
-    scrollToEntry(index);
+    if (selectedIndex === index) {
+      // 같은 항목 다시 클릭 시 선택 해제
+      selectedIndex = -1;
+      displayMode = 'all';
+    } else {
+      selectedIndex = index;
+      displayMode = 'single';  // 개별 보기 모드로 전환
+    }
+  }
+
+  function showAll() {
+    selectedIndex = -1;
+    displayMode = 'all';
   }
 
   async function scrollToEntry(index: number) {
@@ -147,6 +185,17 @@
     }
     
     dslEditor.scrollToLine(lineIndex);
+  }
+
+  function getTypeLabel(type: string): string {
+    const typeLabels: Record<string, string> = {
+      'editinput': 'IN',
+      'editoutput': 'OUT',
+      'editdisplay': 'DSP',
+      'editprocess': 'PRC',
+      'edittrans': 'TRS'
+    };
+    return typeLabels[type] || type?.slice(0, 3)?.toUpperCase() || 'IN';
   }
 
   function addEntry() {
@@ -176,8 +225,17 @@
 
   function applyDSL() {
     try {
-      const newList = dslToRegex(dslText);
-      updateRegexList(newList);
+      const parsed = dslToRegex(dslText);
+      
+      if (displayMode === 'single' && selectedIndex >= 0 && parsed.length === 1) {
+        // 개별 모드: 선택된 항목만 업데이트
+        const newList = [...regexList];
+        newList[selectedIndex] = parsed[0];
+        updateRegexList(newList);
+      } else {
+        // 전체 모드: 전체 목록 교체
+        updateRegexList(parsed);
+      }
     } catch (e) {
       console.error('DSL 파싱 오류:', e);
       alert('DSL 파싱 오류');
@@ -205,6 +263,14 @@
       <div class="toolbar-left">
         <button class="mode-btn" class:active={viewMode === 'dsl'} on:click={() => viewMode = 'dsl'}>DSL</button>
         <button class="mode-btn" class:active={viewMode === 'raw'} on:click={() => viewMode = 'raw'}>Raw</button>
+        <span class="separator">|</span>
+        {#if displayMode === 'single' && selectedIndex >= 0}
+          <button class="mode-btn active-item" on:click={showAll}>
+            📄 {regexList[selectedIndex]?.comment || '선택됨'} ×
+          </button>
+        {:else}
+          <span class="view-label">전체 {regexList.length}개</span>
+        {/if}
       </div>
       <div class="toolbar-right">
         <button class="tool-btn" on:click={copyToClipboard} title="복사">📋</button>
@@ -237,22 +303,31 @@
   <aside class="bookmark-panel">
     <div class="panel-header">
       <input type="text" placeholder="🔍 검색..." bind:value={searchTerm} class="search-input" />
+      <select bind:value={typeFilter} class="type-filter">
+        {#each regexTypes as rt}
+          <option value={rt.value}>{rt.label}</option>
+        {/each}
+      </select>
     </div>
     
     <ul class="entry-list">
       {#each filteredList as entry, i}
         {@const originalIndex = regexList.indexOf(entry)}
+        <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
         <li
           class="entry-item"
           class:selected={selectedIndex === originalIndex}
           on:click={() => selectEntry(originalIndex)}
           on:keydown={(e) => e.key === 'Enter' && selectEntry(originalIndex)}
-          role="button"
-          tabindex="0"
         >
           <div class="entry-info">
             <span class="entry-name">{entry.comment || entry.in?.slice(0, 20) || '(이름 없음)'}</span>
-            <span class="entry-type">{entry.type || 'editinput'}</span>
+            <div class="entry-meta">
+              <span class="entry-type type-{entry.type || 'editinput'}">{getTypeLabel(entry.type)}</span>
+              {#if entry.flag}
+                <span class="entry-flags">/{entry.flag}/</span>
+              {/if}
+            </div>
           </div>
           <button class="btn-delete" on:click|stopPropagation={() => deleteEntry(originalIndex)} title="삭제">×</button>
         </li>
@@ -296,7 +371,27 @@
     border-bottom: 1px solid var(--risu-theme-borderc, #444);
   }
 
-  .toolbar-left, .toolbar-right { display: flex; gap: 0.25rem; }
+  .toolbar-left, .toolbar-right { display: flex; gap: 0.25rem; align-items: center; }
+
+  .separator {
+    color: var(--risu-theme-textcolor2, #666);
+    margin: 0 0.25rem;
+  }
+
+  .view-label {
+    font-size: 0.75rem;
+    color: var(--risu-theme-textcolor2, #888);
+  }
+
+  .active-item {
+    background: #4682B4 !important;
+    color: white !important;
+    border-color: #4682B4 !important;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .mode-btn {
     padding: 0.375rem 0.75rem;
@@ -494,4 +589,49 @@
   }
 
   .count { color: var(--risu-theme-textcolor2, #888); }
+
+  /* 타입 필터 드롭다운 */
+  .type-filter {
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.375rem 0.5rem;
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 4px;
+    background: var(--risu-theme-bgcolor, #1a1a1a);
+    color: var(--risu-theme-textcolor, #fff);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .type-filter:focus {
+    outline: none;
+    border-color: var(--risu-theme-primary-600, #4682B4);
+  }
+
+  /* 항목 메타 정보 */
+  .entry-meta {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .entry-type {
+    font-size: 0.625rem;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .entry-type.type-editinput { background: #3178c6; color: white; }
+  .entry-type.type-editoutput { background: #238636; color: white; }
+  .entry-type.type-editdisplay { background: #a855f7; color: white; }
+  .entry-type.type-editprocess { background: #f97316; color: white; }
+  .entry-type.type-edittrans { background: #ec4899; color: white; }
+
+  .entry-flags {
+    font-size: 0.625rem;
+    color: var(--risu-theme-textcolor2, #888);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
 </style>

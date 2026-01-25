@@ -12,9 +12,25 @@
   let viewMode: 'dsl' | 'raw' = 'dsl';
   let dslText = '';
   let searchTerm = '';
+  let typeFilter = 'all';
   let dslEditor: DSLEditor;
+  let displayMode: 'all' | 'single' = 'all';  // 전체 보기 vs 개별 보기
+
+  // Trigger 타입 목록 (RisuAI 스키마)
+  const triggerTypes = [
+    { value: 'all', label: '전체' },
+    { value: 'start', label: '시작' },
+    { value: 'output', label: '출력' },
+    { value: 'input', label: '입력' },
+    { value: 'manual', label: '수동' },
+    { value: 'always', label: '항상' },
+    { value: 'afterevery', label: '매 턴 후' },
+  ];
 
   $: filteredList = triggerList.filter(entry => {
+    // 타입 필터
+    if (typeFilter !== 'all' && entry.type !== typeFilter) return false;
+    // 검색 필터
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
     return (
@@ -23,8 +39,20 @@
     );
   });
 
-  $: if (triggerList) {
-    dslText = triggerToDSL(triggerList);
+  // DSL 텍스트: 선택 상태에 따라 전체 또는 개별 표시
+  // displayMode와 selectedIndex를 명시적으로 참조하여 reactive 트리거
+  $: {
+    const _mode = displayMode;
+    const _idx = selectedIndex;
+    const _list = triggerList;
+    
+    if (_mode === 'single' && _idx >= 0 && _idx < _list.length) {
+      dslText = triggerToDSL([_list[_idx]]);
+      console.log('[TriggerTab] Single mode - showing entry:', _idx, _list[_idx]?.comment);
+    } else {
+      dslText = triggerToDSL(_list);
+      console.log('[TriggerTab] All mode - showing all:', _list.length, 'entries');
+    }
   }
 
   function getTriggerList(data: any): any[] {
@@ -32,6 +60,18 @@
     if (data.module?.trigger) return data.module.trigger;
     if (data.trigger) return data.trigger;
     return [];
+  }
+
+  function getTypeLabel(type: string): string {
+    const typeLabels: Record<string, string> = {
+      'start': '시작',
+      'output': '출력',
+      'input': '입력',
+      'manual': '수동',
+      'always': '항상',
+      'afterevery': '매턴후'
+    };
+    return typeLabels[type] || type || '???';
   }
 
   function triggerToDSL(entries: any[]): string {
@@ -184,8 +224,19 @@
   }
 
   function selectEntry(index: number) {
-    selectedIndex = index;
-    scrollToEntry(index);
+    if (selectedIndex === index) {
+      // 같은 항목 다시 클릭 시 선택 해제
+      selectedIndex = -1;
+      displayMode = 'all';
+    } else {
+      selectedIndex = index;
+      displayMode = 'single';  // 개별 보기 모드로 전환
+    }
+  }
+
+  function showAll() {
+    selectedIndex = -1;
+    displayMode = 'all';
   }
 
   async function scrollToEntry(index: number) {
@@ -232,8 +283,17 @@
 
   function applyDSL() {
     try {
-      const newList = dslToTrigger(dslText);
-      updateTriggerList(newList);
+      const parsed = dslToTrigger(dslText);
+      
+      if (displayMode === 'single' && selectedIndex >= 0 && parsed.length === 1) {
+        // 개별 모드: 선택된 항목만 업데이트
+        const newList = [...triggerList];
+        newList[selectedIndex] = parsed[0];
+        updateTriggerList(newList);
+      } else {
+        // 전체 모드: 전체 목록 교체
+        updateTriggerList(parsed);
+      }
     } catch (e) {
       console.error('DSL 파싱 오류:', e);
       alert('DSL 파싱 오류');
@@ -261,6 +321,14 @@
       <div class="toolbar-left">
         <button class="mode-btn" class:active={viewMode === 'dsl'} on:click={() => viewMode = 'dsl'}>DSL</button>
         <button class="mode-btn" class:active={viewMode === 'raw'} on:click={() => viewMode = 'raw'}>Raw</button>
+        <span class="separator">|</span>
+        {#if displayMode === 'single' && selectedIndex >= 0}
+          <button class="mode-btn active-item" on:click={showAll}>
+            📄 {triggerList[selectedIndex]?.comment || '선택됨'} ×
+          </button>
+        {:else}
+          <span class="view-label">전체 {triggerList.length}개</span>
+        {/if}
       </div>
       <div class="toolbar-right">
         <button class="tool-btn" on:click={copyToClipboard} title="복사">📋</button>
@@ -293,23 +361,32 @@
   <aside class="bookmark-panel">
     <div class="panel-header">
       <input type="text" placeholder="🔍 검색..." bind:value={searchTerm} class="search-input" />
+      <select bind:value={typeFilter} class="type-filter">
+        {#each triggerTypes as tt}
+          <option value={tt.value}>{tt.label}</option>
+        {/each}
+      </select>
     </div>
     
     <ul class="entry-list">
       {#each filteredList as entry, i}
         {@const originalIndex = triggerList.indexOf(entry)}
+        <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
         <li
           class="entry-item"
           class:selected={selectedIndex === originalIndex}
           class:inactive={entry.active === false}
           on:click={() => selectEntry(originalIndex)}
           on:keydown={(e) => e.key === 'Enter' && selectEntry(originalIndex)}
-          role="button"
-          tabindex="0"
         >
           <div class="entry-info">
             <span class="entry-name">{entry.comment || `트리거 ${originalIndex + 1}`}</span>
-            <span class="entry-type">{entry.type || 'manual'}</span>
+            <div class="entry-meta">
+              <span class="entry-type type-{entry.type || 'manual'}">{getTypeLabel(entry.type)}</span>
+              {#if entry.lowLevelAccess}
+                <span class="entry-flag low-level" title="Low Level Access">⚡</span>
+              {/if}
+            </div>
           </div>
           <button class="btn-delete" on:click|stopPropagation={() => deleteEntry(originalIndex)} title="삭제">×</button>
         </li>
@@ -353,7 +430,27 @@
     border-bottom: 1px solid var(--risu-theme-borderc, #444);
   }
 
-  .toolbar-left, .toolbar-right { display: flex; gap: 0.25rem; }
+  .toolbar-left, .toolbar-right { display: flex; gap: 0.25rem; align-items: center; }
+
+  .separator {
+    color: var(--risu-theme-textcolor2, #666);
+    margin: 0 0.25rem;
+  }
+
+  .view-label {
+    font-size: 0.75rem;
+    color: var(--risu-theme-textcolor2, #888);
+  }
+
+  .active-item {
+    background: #4682B4 !important;
+    color: white !important;
+    border-color: #4682B4 !important;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .mode-btn {
     padding: 0.375rem 0.75rem;
@@ -555,4 +652,51 @@
   }
 
   .count { color: var(--risu-theme-textcolor2, #888); }
+
+  /* 타입 필터 드롭다운 */
+  .type-filter {
+    width: 100%;
+    margin-top: 0.5rem;
+    padding: 0.375rem 0.5rem;
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 4px;
+    background: var(--risu-theme-bgcolor, #1a1a1a);
+    color: var(--risu-theme-textcolor, #fff);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .type-filter:focus {
+    outline: none;
+    border-color: var(--risu-theme-primary-600, #4682B4);
+  }
+
+  /* 항목 메타 정보 */
+  .entry-meta {
+    display: flex;
+    gap: 0.375rem;
+    align-items: center;
+  }
+
+  .entry-type {
+    font-size: 0.625rem;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  .entry-type.type-start { background: #238636; color: white; }
+  .entry-type.type-output { background: #3178c6; color: white; }
+  .entry-type.type-input { background: #a855f7; color: white; }
+  .entry-type.type-manual { background: #6b7280; color: white; }
+  .entry-type.type-always { background: #ef4444; color: white; }
+  .entry-type.type-afterevery { background: #f97316; color: white; }
+
+  .entry-flag {
+    font-size: 0.75rem;
+  }
+
+  .entry-flag.low-level {
+    color: #fbbf24;
+  }
 </style>

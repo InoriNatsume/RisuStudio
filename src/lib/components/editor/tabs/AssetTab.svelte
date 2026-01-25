@@ -30,35 +30,69 @@
   function getAssetList(data: any): AssetEntry[] {
     if (!data) return [];
     
+    console.log('[AssetTab] getAssetList called, data.assets:', data.assets);
+    console.log('[AssetTab] data.assets instanceof Map:', data.assets instanceof Map);
+    
     // risum/charx 모듈 에셋 (새 구조: Map<string, {name, ext, data: Uint8Array, dataUrl?}>)
     if (data.assets && data.assets instanceof Map) {
-      return Array.from(data.assets.entries()).map(([id, asset]: [string, any]) => {
+      const entries = [...data.assets.entries()] as [string, any][];
+      console.log('[AssetTab] Map entries count:', entries.length);
+      
+      // 첫 번째 에셋 구조 확인
+      if (entries.length > 0) {
+        const [firstId, firstAsset] = entries[0];
+        console.log('[AssetTab] First asset:', {
+          id: firstId,
+          name: firstAsset.name,
+          ext: firstAsset.ext,
+          type: firstAsset.type,
+          hasData: !!firstAsset.data,
+          dataType: firstAsset.data?.constructor?.name,
+          dataLength: firstAsset.data?.length,
+          isUint8Array: firstAsset.data instanceof Uint8Array,
+          isArrayLike: ArrayBuffer.isView(firstAsset.data),
+          hasDataUrl: !!firstAsset.dataUrl,
+          dataUrlLen: firstAsset.dataUrl?.length,
+          dataUrlStart: firstAsset.dataUrl?.slice(0, 50)
+        });
+      }
+      
+      const result = entries.map(([id, asset]) => {
         const ext = asset.ext || getExtension(id);
+        const type = asset.type || getAssetType(ext);
         
         // 이미 dataUrl이 있으면 사용 (charx 변환에서 미리 계산됨)
-        if (asset.dataUrl) {
+        if (asset.dataUrl && asset.dataUrl.length > 0) {
           return {
             id,
             name: asset.name || id,
             ext,
-            type: asset.type || getAssetType(ext),
+            type,
             data: asset.data,
             dataUrl: asset.dataUrl,
             size: asset.size || (asset.data?.length || 0)
           };
         }
         
-        const isUint8Array = asset.data instanceof Uint8Array;
+        // Uint8Array 또는 ArrayBuffer 체크 (instanceof 대신 duck typing)
+        const isArrayLike = asset.data && (
+          asset.data instanceof Uint8Array ||
+          ArrayBuffer.isView(asset.data) ||
+          (typeof asset.data.length === 'number' && typeof asset.data[0] === 'number')
+        );
         
         // Uint8Array를 base64로 변환 (magic bytes 감지 사용)
         let dataUrl = '';
         let size = 0;
         
-        if (isUint8Array) {
-          size = asset.data.length;
+        if (isArrayLike) {
+          // 배열 형태를 Uint8Array로 변환
+          const bytes = asset.data instanceof Uint8Array ? asset.data : new Uint8Array(asset.data);
+          size = bytes.length;
           try {
             // AssetGod 방식: magic bytes 우선 감지
-            dataUrl = createDataUrlFromBytes(asset.data, ext);
+            dataUrl = createDataUrlFromBytes(bytes, ext);
+            console.log('[AssetTab] Blob URL 생성:', { id, ext, size, urlLen: dataUrl.length });
           } catch (e) {
             console.error('Asset conversion error:', e);
           }
@@ -72,12 +106,27 @@
           id,
           name: asset.name || id,
           ext,
-          type: getAssetType(ext),
+          type,
           data: asset.data,
           dataUrl,
           size
         };
       });
+      
+      // 디버그: 첫 3개 에셋 상태 확인
+      if (result.length > 0) {
+        console.log('[AssetTab] First 3 assets:', result.slice(0, 3).map(a => ({
+          id: a.id,
+          name: a.name,
+          ext: a.ext,
+          type: a.type,
+          hasData: !!a.data,
+          dataUrlLen: a.dataUrl?.length || 0,
+          dataUrlStart: a.dataUrl?.slice(0, 50)
+        })));
+      }
+      
+      return result;
     }
     
     // 모듈 데이터가 module 필드 안에 있는 경우
@@ -134,17 +183,6 @@
     return [];
   }
   
-  // Uint8Array를 base64로 변환 (청크 방식 - 큰 파일 지원)
-  function uint8ArrayToBase64(bytes: Uint8Array): string {
-    const chunkSize = 8192;
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i += chunkSize) {
-      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.byteLength));
-      binary += String.fromCharCode.apply(null, Array.from(chunk));
-    }
-    return btoa(binary);
-  }
-  
   /**
    * AssetGod 방식: magic bytes로 이미지 포맷 감지
    */
@@ -174,12 +212,16 @@
   }
   
   /**
-   * dataUrl을 생성할 때 magic bytes 우선 사용
+   * AssetGod 방식: Blob URL 생성 (base64보다 훨씬 효율적)
    */
   function createDataUrlFromBytes(data: Uint8Array, ext: string): string {
+    if (!data || data.length === 0) return '';
+    
     // 1. magic bytes로 이미지 포맷 감지
     const detectedFormat = detectImageFormat(data);
     
+    // 2. MIME 타입 결정
+    let mimeType: string;
     if (detectedFormat) {
       const formatMimeMap: Record<string, string> = {
         'png': 'image/png',
@@ -188,14 +230,19 @@
         'webp': 'image/webp',
         'avif': 'image/avif'
       };
-      const mimeType = formatMimeMap[detectedFormat] || 'image/png';
-      const base64 = uint8ArrayToBase64(data);
-      return `data:${mimeType};base64,${base64}`;
+      mimeType = formatMimeMap[detectedFormat] || 'image/png';
+    } else {
+      mimeType = getMimeType(ext);
     }
     
-    // 2. 확장자 기반 폴백
-    const base64 = uint8ArrayToBase64(data);
-    return `data:${getMimeType(ext)};base64,${base64}`;
+    // 3. Blob URL 생성
+    try {
+      const blob = new Blob([new Uint8Array(data)], { type: mimeType });
+      return URL.createObjectURL(blob);
+    } catch (e) {
+      console.error('Failed to create blob URL:', e);
+      return '';
+    }
   }
 
   function getExtension(name: string): string {
@@ -349,11 +396,12 @@
             on:click={() => selectAsset(asset.id)}
           >
             <div class="gallery-thumb">
-              {#if asset.type === 'image' && asset.dataUrl}
+              {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(asset.ext) && asset.dataUrl}
                 <img
                   src={asset.dataUrl}
                   alt={asset.name}
                   loading="lazy"
+                  on:error={(e) => { console.log('[AssetTab] 이미지 로드 실패:', asset.id, asset.dataUrl?.slice(0, 50)); e.currentTarget.style.display = 'none'; }}
                 />
               {:else if asset.type === 'audio'}
                 <span class="type-icon">🎵</span>
@@ -426,10 +474,11 @@
       </div>
       
       <div class="preview-content">
-        {#if selectedAsset.type === 'image' && selectedAsset.dataUrl}
+        {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(selectedAsset.ext) && selectedAsset.dataUrl}
           <img
             src={selectedAsset.dataUrl}
             alt={selectedAsset.name}
+            on:error={() => console.log('[AssetTab] 상세 이미지 로드 실패:', selectedAsset.id)}
           />
         {:else if selectedAsset.type === 'audio' && selectedAsset.dataUrl}
           <audio controls src={selectedAsset.dataUrl}>
