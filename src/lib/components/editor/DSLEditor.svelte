@@ -35,10 +35,13 @@
       caretColor: '#fff',
       padding: '8px 0',
       backgroundColor: '#141414',
-      color: '#abb2bf'
+      color: '#abb2bf',
+      wordBreak: 'break-word',
+      whiteSpace: 'pre-wrap'
     },
     '.cm-line': {
-      color: '#abb2bf'
+      color: '#abb2bf',
+      wordBreak: 'break-word'
     },
     '.cm-cursor, .cm-cursor-primary': {
       borderLeftColor: '#fff !important'
