@@ -11,6 +11,8 @@
   let error = '';
   let isDragging = false;
   let loading = false;
+  let loadingProgress = 0;  // 로딩 진행률 (0-100)
+  let loadingMessage = '';  // 로딩 상태 메시지
   
   // 뷰 모드: 'drop' = 드롭존, 'json' = JSON 뷰어, 'edit' = 편집기
   let viewMode: 'drop' | 'json' | 'edit' = 'drop';
@@ -205,6 +207,15 @@
     // 이미 처리된 경로 추적 (중복 방지)
     const processedPaths = new Set<string>();
     
+    // 대용량 에셋 최적화: 에셋 수가 많으면 초기 dataUrl 생성 제한
+    const LAZY_THRESHOLD = 200;  // 이 수 이상이면 지연 로딩
+    const totalAssetCount = (cardData.assets?.length || 0) + (risuext?.additionalAssets?.length || 0) + assets.size;
+    const useLazyLoading = totalAssetCount > LAZY_THRESHOLD;
+    
+    if (useLazyLoading) {
+      console.log(`[charx] 대용량 에셋 감지 (${totalAssetCount}개) - 지연 로딩 활성화`);
+    }
+    
     if (cardData.assets && Array.isArray(cardData.assets)) {
       for (const asset of cardData.assets) {
         const uri = asset.uri;
@@ -230,7 +241,8 @@
               ext,
               type: asset.type || getAssetType(ext),
               data: assetData,
-              dataUrl: createDataUrl(assetData, ext),
+              // 대용량 시 dataUrl은 나중에 생성 (AssetTab에서 필요 시)
+              dataUrl: useLazyLoading ? '' : createDataUrl(assetData, ext),
               size: assetData.length
             });
           }
@@ -262,7 +274,7 @@
             ext,
             type: getAssetType(ext),
             data: assetData,
-            dataUrl: createDataUrl(assetData, ext),
+            dataUrl: useLazyLoading ? '' : createDataUrl(assetData, ext),
             size: assetData.length
           });
         }
@@ -296,7 +308,7 @@
           ext,
           type: getAssetType(ext),
           data,
-          dataUrl: createDataUrl(data, ext),
+          dataUrl: useLazyLoading ? '' : createDataUrl(data, ext),
           size: data.length
         });
       }
@@ -480,6 +492,8 @@
 
   async function handleFile(file: File) {
     loading = true;
+    loadingProgress = 0;
+    loadingMessage = '파일 읽는 중...';
     error = '';
     fileData = null;
     fileName = file.name;
@@ -488,40 +502,68 @@
     logger.info('file', `Loading file: ${file.name} (${fileType})`);
 
     try {
+      loadingProgress = 10;
+      loadingMessage = '파일 버퍼 생성 중...';
+      
       const buffer = await file.arrayBuffer();
       const data = new Uint8Array(buffer);
+      
+      loadingProgress = 30;
+      loadingMessage = '파일 파싱 중...';
 
       switch (fileType) {
         case 'charx':
           // charx도 변환 필요
+          loadingMessage = 'CharX 파싱 중...';
           const charxResult = await parseCharx(data);
+          loadingProgress = 60;
+          loadingMessage = '에셋 변환 중...';
+          // 비동기로 변환하여 UI 블로킹 방지
+          await new Promise(r => setTimeout(r, 0));
           fileData = transformCharxData(charxResult);
           break;
         case 'png':
           // PNG 카드 파싱
+          loadingMessage = 'PNG 파싱 중...';
           const pngResult = await parsePng(data);
+          loadingProgress = 60;
+          loadingMessage = '에셋 변환 중...';
+          await new Promise(r => setTimeout(r, 0));
           fileData = transformCharxData(pngResult);
           break;
         case 'jpeg':
           // JPEG 카드 (CharX-JPEG) 파싱
+          loadingMessage = 'JPEG 파싱 중...';
           const jpegResult = await parseJpeg(data);
+          loadingProgress = 60;
+          loadingMessage = '에셋 변환 중...';
+          await new Promise(r => setTimeout(r, 0));
           fileData = transformCharxData(jpegResult);
           break;
         case 'risum':
           // risum은 변환 필요
+          loadingMessage = 'Risum 파싱 중...';
           const risumResult = parseRisum(data);
+          loadingProgress = 60;
+          loadingMessage = '데이터 변환 중...';
+          await new Promise(r => setTimeout(r, 0));
           fileData = transformRisumData(risumResult);
           break;
         case 'risup':
+          loadingMessage = 'Risup 파싱 중...';
           fileData = await parseRisup(data);
           break;
         default:
           error = `Unsupported file type: ${fileType}`;
           logger.error('file', error);
       }
+      
+      loadingProgress = 90;
+      loadingMessage = '완료 중...';
 
       if (fileData) {
         logger.info('file', `Successfully parsed ${fileType} file`);
+        loadingProgress = 100;
         viewMode = 'edit'; // 파싱 후 자동으로 편집 모드로 전환
       }
     } catch (e) {
@@ -529,6 +571,8 @@
       logger.error('file', `Parse error: ${error}`);
     } finally {
       loading = false;
+      loadingProgress = 0;
+      loadingMessage = '';
     }
   }
 
@@ -698,7 +742,13 @@
     {#if loading}
       <div class="loading">
         <div class="spinner"></div>
-        <p>Loading...</p>
+        <p>{loadingMessage || 'Loading...'}</p>
+        {#if loadingProgress > 0}
+          <div class="progress-bar">
+            <div class="progress-fill" style="width: {loadingProgress}%"></div>
+          </div>
+          <p class="progress-text">{loadingProgress}%</p>
+        {/if}
       </div>
     {:else if !fileData}
       <div class="dropzone-content">
@@ -827,6 +877,28 @@
 
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+  
+  .progress-bar {
+    width: 200px;
+    height: 8px;
+    background: var(--bg-tertiary, #333);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+  }
+  
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent, #4a9eff), #00c853);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+  }
+  
+  .progress-text {
+    font-size: 0.875rem;
+    color: var(--text-secondary, #888);
+    margin-top: 0.25rem;
   }
 
   .file-info {

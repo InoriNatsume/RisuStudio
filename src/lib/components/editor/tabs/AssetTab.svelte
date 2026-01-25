@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import { extractImageMetadata, parsePngTextChunks } from '$lib/core/exif';
   import type { ExtractedMetadata, NAINormalizedMeta } from '$lib/core/exif/types';
   import type { ComfyNormalizedMeta } from '$lib/core/exif/schema/comfyui';
@@ -8,6 +8,173 @@
   export let data: any;
 
   const dispatch = createEventDispatcher();
+
+  // ===== 가상 스크롤링 / 지연 로딩 설정 =====
+  const ITEMS_PER_PAGE = 100;  // 한 번에 표시할 최대 아이템 수
+  const LAZY_LOAD_THRESHOLD = 200;  // 스크롤 여유 (px)
+  const LAZY_LOADING_ASSET_THRESHOLD = 200;  // 이 개수 이상이면 지연 로딩 사용
+  
+  let currentPage = 0;
+  let galleryContainer: HTMLDivElement;
+  let isLoadingMore = false;
+  
+  // 표시할 아이템 수 (가상 스크롤링)
+  $: visibleCount = Math.min((currentPage + 1) * ITEMS_PER_PAGE, filteredAssetList.length);
+  $: visibleAssets = filteredAssetList.slice(0, visibleCount);
+  $: hasMoreItems = visibleCount < filteredAssetList.length;
+  
+  // 썸네일 로드 상태 (지연 로딩)
+  let loadedThumbnails: Set<string> = new Set();
+  let thumbnailObserver: IntersectionObserver | null = null;
+  
+  // 에셋 dataUrl 캐시 (지연 생성용)
+  let dataUrlCache: Map<string, string> = new Map();
+  
+  onMount(() => {
+    // Intersection Observer for lazy loading thumbnails
+    thumbnailObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const id = (entry.target as HTMLElement).dataset.assetId;
+          if (id && !loadedThumbnails.has(id)) {
+            loadedThumbnails.add(id);
+            loadedThumbnails = loadedThumbnails;  // trigger reactivity
+          }
+        }
+      });
+    }, { rootMargin: '100px' });
+  });
+  
+  onDestroy(() => {
+    thumbnailObserver?.disconnect();
+  });
+  
+  /**
+   * Svelte action: 썸네일 요소가 화면에 보일 때 로드 트리거
+   */
+  function observeThumbnail(node: HTMLElement, asset: AssetEntry) {
+    // 이미 dataUrl이 있거나 로드됐으면 관찰 안함
+    if (asset.dataUrl && asset.dataUrl.length > 0) return;
+    if (loadedThumbnails.has(asset.id)) return;
+    
+    if (!thumbnailObserver) {
+      // Observer가 없으면 즉시 로드
+      loadedThumbnails.add(asset.id);
+      loadedThumbnails = loadedThumbnails;
+      return;
+    }
+    
+    thumbnailObserver.observe(node);
+    
+    // 요소가 이미 뷰포트에 있는지 즉시 체크
+    requestAnimationFrame(() => {
+      const rect = node.getBoundingClientRect();
+      const inViewport = rect.top < window.innerHeight + 100 && rect.bottom > -100;
+      if (inViewport && !loadedThumbnails.has(asset.id)) {
+        loadedThumbnails.add(asset.id);
+        loadedThumbnails = loadedThumbnails;
+      }
+    });
+    
+    return {
+      destroy() {
+        thumbnailObserver?.unobserve(node);
+      }
+    };
+  }
+  
+  // 스크롤 이벤트 핸들러 - 더 많은 아이템 로드
+  function handleScroll(e: Event) {
+    if (isLoadingMore || !hasMoreItems) return;
+    
+    const container = e.target as HTMLElement;
+    const scrollBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    
+    if (scrollBottom < LAZY_LOAD_THRESHOLD) {
+      loadMoreItems();
+    }
+  }
+  
+  function loadMoreItems() {
+    if (isLoadingMore || !hasMoreItems) return;
+    isLoadingMore = true;
+    
+    // 다음 페이지 로드 (약간의 딜레이로 UI 블로킹 방지)
+    requestAnimationFrame(() => {
+      currentPage++;
+      isLoadingMore = false;
+    });
+  }
+  
+  // 검색/필터 변경 시 페이지 리셋
+  function resetPagination() {
+    currentPage = 0;
+    loadedThumbnails.clear();
+    loadedThumbnails = loadedThumbnails;
+  }
+  
+  /**
+   * 지연 로딩: 에셋의 dataUrl을 on-demand로 생성/반환
+   * 캐시를 사용하여 중복 생성 방지
+   */
+  function getAssetDataUrl(asset: AssetEntry): string {
+    // 이미 dataUrl이 있으면 반환
+    if (asset.dataUrl && asset.dataUrl.length > 0) {
+      return asset.dataUrl;
+    }
+    
+    // 캐시 확인
+    if (dataUrlCache.has(asset.id)) {
+      return dataUrlCache.get(asset.id)!;
+    }
+    
+    // 데이터가 없으면 빈 문자열
+    if (!asset.data) {
+      console.warn('[getAssetDataUrl] No data for:', asset.id);
+      return '';
+    }
+    
+    console.log('[getAssetDataUrl] Generating for:', asset.id, 'dataType:', asset.data?.constructor?.name);
+    
+    // 데이터에서 dataUrl 생성
+    try {
+      let dataUrl = '';
+      
+      if (asset.data instanceof Uint8Array) {
+        dataUrl = createDataUrlFromBytes(asset.data, asset.ext);
+      } else if (ArrayBuffer.isView(asset.data)) {
+        const bytes = new Uint8Array((asset.data as any).buffer);
+        dataUrl = createDataUrlFromBytes(bytes, asset.ext);
+      } else if (typeof asset.data === 'string') {
+        dataUrl = `data:${getMimeType(asset.ext)};base64,${asset.data}`;
+      } else if (Array.isArray(asset.data)) {
+        const bytes = new Uint8Array(asset.data as unknown as number[]);
+        dataUrl = createDataUrlFromBytes(bytes, asset.ext);
+      }
+      
+      console.log('[getAssetDataUrl] Generated:', asset.id, 'urlLen:', dataUrl.length);
+      
+      // 캐시에 저장
+      if (dataUrl) {
+        dataUrlCache.set(asset.id, dataUrl);
+      }
+      
+      return dataUrl;
+    } catch (e) {
+      console.error('[AssetTab] getAssetDataUrl error:', e);
+      return '';
+    }
+  }
+  
+  /**
+   * 썸네일이 화면에 보일 때 dataUrl 로드 요청
+   */
+  function requestThumbnailLoad(asset: AssetEntry) {
+    if (!loadedThumbnails.has(asset.id)) {
+      loadedThumbnails.add(asset.id);
+      loadedThumbnails = loadedThumbnails; // trigger reactivity
+    }
+  }
 
   // Asset 데이터 추출
   $: assetList = getAssetList(data);
@@ -98,7 +265,10 @@
     // risum/charx 모듈 에셋 (새 구조: Map<string, {name, ext, data: Uint8Array, dataUrl?}>)
     if (data.assets && data.assets instanceof Map) {
       const entries = [...data.assets.entries()] as [string, any][];
-      console.log('[AssetTab] Map entries count:', entries.length);
+      const assetCount = entries.length;
+      const useLazyLoading = assetCount > LAZY_LOADING_ASSET_THRESHOLD;
+      
+      console.log('[AssetTab] Map entries count:', assetCount, 'useLazyLoading:', useLazyLoading);
       
       // 첫 번째 에셋 구조 확인
       if (entries.length > 0) {
@@ -134,6 +304,20 @@
             data: asset.data,
             dataUrl: asset.dataUrl,
             size: asset.size || (asset.data?.length || 0)
+          };
+        }
+        
+        // 대용량 에셋일 때는 dataUrl 생성 건너뛰기 (지연 로딩)
+        if (useLazyLoading) {
+          const size = asset.data?.length || 0;
+          return {
+            id,
+            name: asset.name || id,
+            ext,
+            type,
+            data: asset.data,
+            dataUrl: '', // 나중에 on-demand로 생성
+            size
           };
         }
         
@@ -716,7 +900,16 @@
   let filteredAssetList: AssetEntry[] = [];
   let isSearching = false;
   
+  // 초기 로드 시 filteredAssetList 설정
+  $: if (assetList.length > 0 && filteredAssetList.length === 0 && !searchQuery) {
+    filteredAssetList = assetList;
+    console.log('[AssetTab] Initial filteredAssetList set:', filteredAssetList.length);
+  }
+  
   async function updateFilteredList() {
+    // 페이지네이션 리셋
+    resetPagination();
+    
     if (!searchQuery.trim()) {
       filteredAssetList = assetList;
       return;
@@ -1339,6 +1532,9 @@
   }
 
   $: selectedAsset = assetList.find((a) => a.id === selectedId);
+  
+  // 선택된 에셋의 dataUrl을 on-demand로 준비
+  $: selectedAssetUrl = selectedAsset ? getAssetDataUrl(selectedAsset) : '';
 </script>
 
 <div class="asset-tab">
@@ -1450,13 +1646,13 @@
     {#if viewMode === 'detail' && selectedAsset}
       <div class="detail-view">
         <div class="detail-image">
-          {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(selectedAsset.ext) && selectedAsset.dataUrl}
-            <img src={selectedAsset.dataUrl} alt={selectedAsset.name} />
-          {:else if selectedAsset.type === 'audio' && selectedAsset.dataUrl}
-            <audio controls src={selectedAsset.dataUrl}><track kind="captions" /></audio>
-          {:else if selectedAsset.type === 'video' && selectedAsset.dataUrl}
+          {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(selectedAsset.ext) && selectedAssetUrl}
+            <img src={selectedAssetUrl} alt={selectedAsset.name} />
+          {:else if selectedAsset.type === 'audio' && selectedAssetUrl}
+            <audio controls src={selectedAssetUrl}><track kind="captions" /></audio>
+          {:else if selectedAsset.type === 'video' && selectedAssetUrl}
             <!-- svelte-ignore a11y-media-has-caption -->
-            <video controls src={selectedAsset.dataUrl}></video>
+            <video controls src={selectedAssetUrl}></video>
           {:else}
             <div class="no-preview">미리보기 불가</div>
           {/if}
@@ -1617,14 +1813,19 @@
         </div>
       </div>
     
-    <!-- 갤러리 뷰 -->
+    <!-- 갤러리 뷰 (가상 스크롤링 적용) -->
     {:else if viewMode === 'gallery'}
-      <div class="gallery-view">
-        {#each filteredAssetList as asset}
+      <div class="gallery-view" bind:this={galleryContainer} on:scroll={handleScroll}>
+        {#each visibleAssets as asset, idx (asset.id)}
+          {@const isInInitialView = idx < ITEMS_PER_PAGE}
+          {@const shouldLoadThumb = isInInitialView || loadedThumbnails.has(asset.id) || (asset.dataUrl && asset.dataUrl.length > 0)}
+          {@const thumbUrl = shouldLoadThumb ? getAssetDataUrl(asset) : ''}
           <button
             class="gallery-item"
             class:selected={selectedId === asset.id}
             class:multi-selected={selectedAssetIds.has(asset.id)}
+            data-asset-id={asset.id}
+            use:observeThumbnail={asset}
             on:click={(e) => {
               if (isMultiSelectMode) {
                 e.stopPropagation();
@@ -1641,17 +1842,22 @@
               </div>
             {/if}
             <div class="gallery-thumb">
-              {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(asset.ext) && asset.dataUrl}
+              {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(asset.ext) && thumbUrl}
                 <img
-                  src={asset.dataUrl}
+                  src={thumbUrl}
                   alt={asset.name}
                   loading="lazy"
+                  decoding="async"
                   on:error={(e) => { 
-                    console.log('[AssetTab] 이미지 로드 실패:', asset.id); 
                     const target = e.currentTarget; 
                     if (target instanceof HTMLElement) target.style.display = 'none'; 
                   }}
                 />
+              {:else if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(asset.ext) && !shouldLoadThumb}
+                <!-- 썸네일 로딩 대기 placeholder -->
+                <div class="thumb-placeholder">
+                  <span>🖼️</span>
+                </div>
               {:else if asset.type === 'audio'}
                 <span class="type-icon">🎵</span>
               {:else if asset.type === 'video'}
@@ -1663,6 +1869,18 @@
             <span class="gallery-name">{asset.name}</span>
           </button>
         {/each}
+        
+        {#if hasMoreItems}
+          <div class="load-more-indicator">
+            {#if isLoadingMore}
+              <span>로딩 중...</span>
+            {:else}
+              <button class="btn-load-more" on:click={loadMoreItems}>
+                더 보기 ({visibleCount}/{filteredAssetList.length})
+              </button>
+            {/if}
+          </div>
+        {/if}
         
         {#if filteredAssetList.length === 0}
           <div class="empty-gallery">
@@ -1690,7 +1908,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each filteredAssetList as asset}
+          {#each visibleAssets as asset (asset.id)}
             <tr
               class:selected={selectedId === asset.id}
               class:multi-selected={selectedAssetIds.has(asset.id)}
@@ -1725,6 +1943,15 @@
               </td>
             </tr>
           {/each}
+          {#if hasMoreItems}
+            <tr class="load-more-row">
+              <td colspan="5">
+                <button class="btn-load-more" on:click={loadMoreItems}>
+                  더 보기 ({visibleCount}/{filteredAssetList.length})
+                </button>
+              </td>
+            </tr>
+          {/if}
         </tbody>
       </table>
       
@@ -1754,19 +1981,19 @@
       </div>
       
       <div class="preview-content">
-        {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(selectedAsset.ext) && selectedAsset.dataUrl}
+        {#if ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp'].includes(selectedAsset.ext) && selectedAssetUrl}
           <img
-            src={selectedAsset.dataUrl}
+            src={selectedAssetUrl}
             alt={selectedAsset.name}
             on:error={() => console.log('[AssetTab] 상세 이미지 로드 실패:', selectedAsset.id)}
           />
-        {:else if selectedAsset.type === 'audio' && selectedAsset.dataUrl}
-          <audio controls src={selectedAsset.dataUrl}>
+        {:else if selectedAsset.type === 'audio' && selectedAssetUrl}
+          <audio controls src={selectedAssetUrl}>
             <track kind="captions" />
           </audio>
-        {:else if selectedAsset.type === 'video' && selectedAsset.dataUrl}
+        {:else if selectedAsset.type === 'video' && selectedAssetUrl}
           <!-- svelte-ignore a11y-media-has-caption -->
-          <video controls src={selectedAsset.dataUrl}></video>
+          <video controls src={selectedAssetUrl}></video>
         {:else}
           <div class="no-preview">미리보기 불가</div>
         {/if}
@@ -2136,6 +2363,56 @@
     gap: 1rem;
     padding: 3rem;
     color: var(--text-secondary, #aaa);
+  }
+
+  /* 더 보기 버튼 */
+  .load-more-indicator {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .btn-load-more {
+    padding: 0.5rem 1.5rem;
+    border: 1px solid var(--primary, #0f3460);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--primary, #4a9eff);
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: all 0.2s;
+  }
+
+  .btn-load-more:hover {
+    background: var(--primary, #0f3460);
+    color: #fff;
+  }
+
+  .load-more-row td {
+    text-align: center;
+    padding: 1rem;
+  }
+  
+  /* 썸네일 지연 로딩 placeholder */
+  .thumb-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    animation: placeholderPulse 1.5s ease-in-out infinite;
+  }
+  
+  .thumb-placeholder span {
+    font-size: 1.5rem;
+    opacity: 0.5;
+  }
+  
+  @keyframes placeholderPulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 0.3; }
   }
 
   /* 목록 뷰 */
