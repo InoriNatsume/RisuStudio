@@ -5,6 +5,11 @@
   import RegexTab from './tabs/RegexTab.svelte';
   import TriggerTab from './tabs/TriggerTab.svelte';
   import AssetTab from './tabs/AssetTab.svelte';
+  // 프리셋 전용 탭들
+  import PresetBasicTab from './tabs/PresetBasicTab.svelte';
+  import PresetParamsTab from './tabs/PresetParamsTab.svelte';
+  import PresetPromptsTab from './tabs/PresetPromptsTab.svelte';
+  import PresetAdvancedTab from './tabs/PresetAdvancedTab.svelte';
 
   export let data: any;
   export let fileType: 'charx' | 'risum' | 'risup';
@@ -13,10 +18,15 @@
   const dispatch = createEventDispatcher();
 
   // 현재 활성 탭
-  let activeTab: 'info' | 'lorebook' | 'regex' | 'trigger' | 'assets' = 'info';
+  let activeTab: string = 'info';
 
   // 탭 목록 (파일 타입에 따라 다름)
   $: tabs = getTabs(fileType, data);
+
+  // 파일 타입 변경 시 기본 탭으로 리셋
+  $: if (fileType) {
+    activeTab = fileType === 'risup' ? 'basic' : 'info';
+  }
 
   function getTabs(type: string, data: any) {
     // 데이터에서 카운트 계산
@@ -33,13 +43,21 @@
       { id: 'assets', label: '에셋', icon: '🖼️', count: assetCount },
     ];
 
+    // 프리셋 전용 탭들
+    const presetTabs = [
+      { id: 'basic', label: '기본 정보', icon: '📋', count: 0 },
+      { id: 'params', label: '모델 파라미터', icon: '🔧', count: 0 },
+      { id: 'prompts', label: '프롬프트', icon: '📝', count: 0 },
+      { id: 'advanced', label: '고급 설정', icon: '⚙️', count: 0 },
+    ];
+
     switch (type) {
       case 'charx':
         return allTabs; // 전부
       case 'risum':
         return allTabs.filter(t => ['info', 'lorebook', 'regex', 'trigger', 'assets'].includes(t.id));
       case 'risup':
-        return [{ id: 'info', label: '프리셋 정보', icon: '⚙️', count: 0 }];
+        return presetTabs;
       default:
         return allTabs;
     }
@@ -114,18 +132,32 @@
   </nav>
 
   <!-- 탭 콘텐츠 -->
-  <main class="tab-content">
+  <main class="tab-content" class:no-padding={fileType === 'risup' || activeTab !== 'info'}>
     {#if editedData}
-      {#if activeTab === 'info'}
-        <InfoTab data={editedData} {fileType} on:change={handleDataChange} />
-      {:else if activeTab === 'lorebook'}
-        <LorebookTab data={editedData} on:change={handleDataChange} />
-      {:else if activeTab === 'regex'}
-        <RegexTab data={editedData} on:change={handleDataChange} />
-      {:else if activeTab === 'trigger'}
-        <TriggerTab data={editedData} on:change={handleDataChange} />
-      {:else if activeTab === 'assets'}
-        <AssetTab data={editedData} on:change={handleDataChange} />
+      {#if fileType === 'risup'}
+        <!-- 프리셋 전용 탭들 -->
+        {#if activeTab === 'basic'}
+          <PresetBasicTab data={editedData} on:change={handleDataChange} />
+        {:else if activeTab === 'params'}
+          <PresetParamsTab data={editedData} on:change={handleDataChange} />
+        {:else if activeTab === 'prompts'}
+          <PresetPromptsTab data={editedData} on:change={handleDataChange} />
+        {:else if activeTab === 'advanced'}
+          <PresetAdvancedTab data={editedData} on:change={handleDataChange} />
+        {/if}
+      {:else}
+        <!-- 봇/모듈 탭들 -->
+        {#if activeTab === 'info'}
+          <InfoTab data={editedData} {fileType} on:change={handleDataChange} />
+        {:else if activeTab === 'lorebook'}
+          <LorebookTab data={editedData} on:change={handleDataChange} />
+        {:else if activeTab === 'regex'}
+          <RegexTab data={editedData} on:change={handleDataChange} />
+        {:else if activeTab === 'trigger'}
+          <TriggerTab data={editedData} on:change={handleDataChange} />
+        {:else if activeTab === 'assets'}
+          <AssetTab data={editedData} on:change={handleDataChange} />
+        {/if}
       {/if}
     {:else}
       <div class="empty-state">
@@ -265,6 +297,10 @@
     flex: 1;
     overflow: auto;
     padding: 1rem;
+  }
+
+  .tab-content.no-padding {
+    padding: 0;
   }
 
   .empty-state {
