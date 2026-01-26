@@ -52,30 +52,46 @@
   }
 
   function getCharxFields(data: any) {
-    const card = data.card || data;
-    const cardData = card.data || card;
+    // transformCharxData에서 반환된 구조:
+    // { card, cardData, lorebook, regex, trigger, assets, type }
+    // card = 전체 카드 { spec, spec_version, data }
+    // cardData = card.data (실제 캐릭터 데이터)
+    const cardData = data.cardData || data.card?.data || data.data || data;
     
-    // RisuAI 확장 필드 (backgroundHTML 등)
-    const risuExt = cardData.extensions?.risuai || {};
-    const additionalData = risuExt.additionalData || {};
+    // RisuAI 확장 필드
+    const risuExt = cardData?.extensions?.risuai || {};
     
-    // backgroundHTML은 캐릭터에서 backgroundEmbedding에 해당
-    const backgroundHTML = cardData.backgroundHTML || additionalData.backgroundHTML || '';
+    console.log('[InfoTab] charx 필드 로드:', {
+      name: cardData?.name,
+      descLen: cardData?.description?.length,
+      firstMesLen: cardData?.first_mes?.length,
+      creatorNotes: cardData?.creator_notes?.length,
+      risuExtKeys: Object.keys(risuExt)
+    });
     
     return [
       // 기본 필드
-      { key: 'name', label: '이름', type: 'text', value: cardData.name || '', section: 'basic' },
-      { key: 'description', label: '설명', type: 'textarea', value: cardData.description || '', section: 'basic' },
-      { key: 'personality', label: '성격', type: 'textarea', value: cardData.personality || '', section: 'basic' },
-      { key: 'scenario', label: '시나리오', type: 'textarea', value: cardData.scenario || '', section: 'basic' },
-      { key: 'first_mes', label: '첫 메시지', type: 'textarea', value: cardData.first_mes || '', section: 'basic' },
-      { key: 'mes_example', label: '대화 예시', type: 'textarea', value: cardData.mes_example || '', section: 'basic' },
-      { key: 'creator_notes', label: '제작자 노트', type: 'textarea', value: cardData.creator_notes || '', section: 'basic' },
-      { key: 'system_prompt', label: '시스템 프롬프트', type: 'textarea', value: cardData.system_prompt || '', section: 'basic' },
-      { key: 'post_history_instructions', label: '후기록 지시', type: 'textarea', value: cardData.post_history_instructions || '', section: 'basic' },
+      { key: 'name', label: '이름', type: 'text', value: cardData?.name || '', section: 'basic' },
+      { key: 'description', label: '설명', type: 'textarea', value: cardData?.description || '', section: 'basic' },
+      { key: 'personality', label: '성격', type: 'textarea', value: cardData?.personality || '', section: 'basic' },
+      { key: 'scenario', label: '시나리오', type: 'textarea', value: cardData?.scenario || '', section: 'basic' },
+      { key: 'first_mes', label: '첫 메시지', type: 'textarea', value: cardData?.first_mes || '', section: 'basic' },
+      { key: 'mes_example', label: '대화 예시', type: 'textarea', value: cardData?.mes_example || '', section: 'basic' },
+      { key: 'creator_notes', label: '작가의 노트', type: 'textarea', value: cardData?.creator_notes || '', section: 'basic' },
+      { key: 'system_prompt', label: '시스템 프롬프트', type: 'textarea', value: cardData?.system_prompt || '', section: 'basic' },
+      { key: 'post_history_instructions', label: '대화 후 지시', type: 'textarea', value: cardData?.post_history_instructions || '', section: 'basic' },
       
-      // RisuAI 확장 필드
-      { key: 'backgroundHTML', label: '백그라운드 임베딩', type: 'code', value: backgroundHTML, section: 'advanced' },
+      // RisuAI 확장 필드 (스키마: RisuaiExtensionsV3Schema)
+      { key: 'additionalText', label: '추가 디스크립션', type: 'textarea', value: risuExt.additionalText || '', section: 'basic', path: 'extensions.risuai.additionalText' },
+      { key: 'defaultVariables', label: '기본 변수', type: 'textarea', value: risuExt.defaultVariables || '', section: 'basic', path: 'extensions.risuai.defaultVariables' },
+      { key: 'license', label: '라이선스', type: 'text', value: risuExt.license || '', section: 'advanced', path: 'extensions.risuai.license' },
+      
+      // 옵션
+      { key: 'lowLevelAccess', label: '저수준 접근', type: 'checkbox', value: risuExt.lowLevelAccess || false, section: 'advanced', path: 'extensions.risuai.lowLevelAccess' },
+      { key: 'largePortrait', label: '대형 초상화', type: 'checkbox', value: risuExt.largePortrait || false, section: 'advanced', path: 'extensions.risuai.largePortrait' },
+      { key: 'lorePlus', label: '로어 플러스', type: 'checkbox', value: risuExt.lorePlus || false, section: 'advanced', path: 'extensions.risuai.lorePlus' },
+      { key: 'inlayViewScreen', label: '인레이 뷰 스크린', type: 'checkbox', value: risuExt.inlayViewScreen || false, section: 'advanced', path: 'extensions.risuai.inlayViewScreen' },
+      { key: 'utilityBot', label: '유틸리티 봇', type: 'checkbox', value: risuExt.utilityBot || false, section: 'advanced', path: 'extensions.risuai.utilityBot' },
     ];
   }
 

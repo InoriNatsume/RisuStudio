@@ -716,7 +716,7 @@
 {#if viewMode === 'edit' && fileData && fileType}
   <EditorScreen
     data={fileData}
-    {fileType}
+    fileType={fileType === 'jpeg' || fileType === 'png' ? 'charx' : fileType}
     {fileName}
     on:close={handleClose}
     on:download={handleDownload}
