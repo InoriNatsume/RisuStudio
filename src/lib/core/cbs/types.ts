@@ -23,13 +23,39 @@ export interface CBSContext {
   char: {
     name: string;
     nickname?: string;
+    personality?: string;
+    description?: string;
+    scenario?: string;
+    mes_example?: string;
+    system_prompt?: string;
+    emotionList?: string[];
+    assets?: Array<{ name: string; type: string }>;
   };
   
   /** 사용자 이름 */
   user: string;
   
+  /** 페르소나 */
+  persona?: string;
+  
+  /** 탈옥 프롬프트 */
+  jailbreak?: string;
+  
+  /** 탈옥 활성화 여부 */
+  jbToggled?: boolean;
+  
+  /** 글로벌 노트 */
+  globalNote?: string;
+  
   /** 채팅 기록 */
   chatHistory: CBSMessage[];
+  
+  /** 히스토리 (새 형식) */
+  history: Array<{
+    role: 'user' | 'char' | 'system';
+    content: string;
+    timestamp?: number;
+  }>;
   
   /** 현재 채팅 ID (메시지 인덱스) */
   chatID: number;
@@ -45,6 +71,21 @@ export interface CBSContext {
   
   /** 화면 표시용 처리 중 여부 */
   displaying?: boolean;
+  
+  /** 현재 모델명 */
+  model?: string;
+  
+  /** 현재 역할 */
+  role?: string;
+  
+  /** 최대 컨텍스트 크기 */
+  maxContext?: number;
+  
+  /** 트리거 ID */
+  triggerId?: string;
+  
+  /** 활성화된 모듈 목록 */
+  enabledModules?: string[];
 }
 
 /**
@@ -199,13 +240,32 @@ export function createDefaultContext(): CBSContext {
     chatVars: {},
     globalVars: {},
     tempVars: {},
-    char: { name: 'Character' },
+    char: { 
+      name: 'Character',
+      personality: '',
+      description: '',
+      scenario: '',
+      mes_example: '',
+      system_prompt: '',
+      emotionList: [],
+      assets: [],
+    },
     user: 'User',
+    persona: '',
+    jailbreak: '',
+    jbToggled: false,
+    globalNote: '',
     chatHistory: [],
+    history: [],
     chatID: -1,
     runVar: true,
     rmVar: false,
     tokenizeAccurate: false,
     displaying: false,
+    model: 'unknown',
+    role: 'user',
+    maxContext: 4096,
+    triggerId: undefined,
+    enabledModules: [],
   };
 }

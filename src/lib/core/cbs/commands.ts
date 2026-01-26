@@ -667,6 +667,811 @@ export function registerBuiltinCommands(): Map<string, CBSCommand> {
     },
   });
 
+  // ===== 채팅 히스토리 =====
+
+  register({
+    name: 'previouscharchat',
+    aliases: [],
+    description: '이전 캐릭터 메시지 반환',
+    callback: (args, ctx) => ctx.history.filter(m => m.role === 'char').at(-1)?.content ?? '',
+  });
+
+  register({
+    name: 'previoususerchat',
+    aliases: [],
+    description: '이전 사용자 메시지 반환',
+    callback: (args, ctx) => ctx.history.filter(m => m.role === 'user').at(-1)?.content ?? '',
+  });
+
+  register({
+    name: 'lastmessage',
+    aliases: [],
+    description: '마지막 메시지 반환',
+    callback: (args, ctx) => ctx.history.at(-1)?.content ?? '',
+  });
+
+  register({
+    name: 'lastmessageid',
+    aliases: [],
+    description: '마지막 메시지 ID 반환',
+    callback: (args, ctx) => (ctx.history.length - 1).toString(),
+  });
+
+  register({
+    name: 'history',
+    aliases: [],
+    description: '특정 인덱스 메시지 반환',
+    callback: (args, ctx) => {
+      const idx = Number(args[0] ?? 0);
+      return ctx.history.at(idx)?.content ?? '';
+    },
+  });
+
+  register({
+    name: 'previouschatlog',
+    aliases: [],
+    description: '이전 채팅 로그 반환',
+    callback: (args, ctx) => {
+      const count = Number(args[0] ?? 1);
+      return ctx.history.slice(-count).map(m => m.content).join('\n');
+    },
+  });
+
+  register({
+    name: 'userhistory',
+    aliases: [],
+    description: '사용자 메시지 히스토리 반환',
+    callback: (args, ctx) => {
+      const userMsgs = ctx.history.filter(m => m.role === 'user');
+      const idx = Number(args[0] ?? 0);
+      return userMsgs.at(idx)?.content ?? '';
+    },
+  });
+
+  register({
+    name: 'charhistory',
+    aliases: [],
+    description: '캐릭터 메시지 히스토리 반환',
+    callback: (args, ctx) => {
+      const charMsgs = ctx.history.filter(m => m.role === 'char');
+      const idx = Number(args[0] ?? 0);
+      return charMsgs.at(idx)?.content ?? '';
+    },
+  });
+
+  // ===== 캐릭터 정보 =====
+
+  register({
+    name: 'personality',
+    aliases: [],
+    description: '캐릭터 성격 반환',
+    callback: (args, ctx) => ctx.char.personality ?? '',
+  });
+
+  register({
+    name: 'description',
+    aliases: ['desc'],
+    description: '캐릭터 설명 반환',
+    callback: (args, ctx) => ctx.char.description ?? '',
+  });
+
+  register({
+    name: 'scenario',
+    aliases: [],
+    description: '시나리오 반환',
+    callback: (args, ctx) => ctx.char.scenario ?? '',
+  });
+
+  register({
+    name: 'exampledialogue',
+    aliases: ['example_dialogue', 'mesexample'],
+    description: '예시 대화 반환',
+    callback: (args, ctx) => ctx.char.mes_example ?? '',
+  });
+
+  register({
+    name: 'persona',
+    aliases: [],
+    description: '사용자 페르소나 반환',
+    callback: (args, ctx) => ctx.persona ?? '',
+  });
+
+  register({
+    name: 'mainprompt',
+    aliases: ['systemprompt'],
+    description: '시스템 프롬프트 반환',
+    callback: (args, ctx) => ctx.char.system_prompt ?? '',
+  });
+
+  register({
+    name: 'jb',
+    aliases: ['jailbreak'],
+    description: '탈옥 프롬프트 반환',
+    callback: (args, ctx) => ctx.jailbreak ?? '',
+  });
+
+  register({
+    name: 'globalnote',
+    aliases: [],
+    description: '글로벌 노트 반환',
+    callback: (args, ctx) => ctx.globalNote ?? '',
+  });
+
+  register({
+    name: 'firstmsgindex',
+    aliases: [],
+    description: '첫 메시지 인덱스 반환',
+    callback: () => '0',
+  });
+
+  // ===== 상태 확인 =====
+
+  register({
+    name: 'isfirstmsg',
+    aliases: [],
+    description: '첫 메시지인지 확인',
+    callback: (args, ctx) => ctx.chatID === 0 ? '1' : '0',
+  });
+
+  register({
+    name: 'jbtoggled',
+    aliases: [],
+    description: '탈옥 활성화 상태',
+    callback: (args, ctx) => ctx.jbToggled ? '1' : '0',
+  });
+
+  register({
+    name: 'maxcontext',
+    aliases: [],
+    description: '최대 컨텍스트 크기',
+    callback: (args, ctx) => (ctx.maxContext ?? 4096).toString(),
+  });
+
+  register({
+    name: 'model',
+    aliases: [],
+    description: '현재 모델명 반환',
+    callback: (args, ctx) => ctx.model ?? 'unknown',
+  });
+
+  register({
+    name: 'role',
+    aliases: [],
+    description: '현재 역할 반환',
+    callback: (args, ctx) => ctx.role ?? 'unknown',
+  });
+
+  // ===== 시간 확장 =====
+
+  register({
+    name: 'isotime',
+    aliases: [],
+    description: 'ISO 형식 시간 반환',
+    callback: (args, ctx) => {
+      if (ctx.tokenizeAccurate) return '00:00:00';
+      return new Date().toISOString().slice(11, 19);
+    },
+  });
+
+  register({
+    name: 'isodate',
+    aliases: [],
+    description: 'ISO 형식 날짜 반환',
+    callback: (args, ctx) => {
+      if (ctx.tokenizeAccurate) return '2000-01-01';
+      return new Date().toISOString().slice(0, 10);
+    },
+  });
+
+  register({
+    name: 'messagetime',
+    aliases: [],
+    description: '메시지 시간 반환',
+    callback: (args, ctx) => {
+      const idx = Number(args[0] ?? ctx.chatID);
+      const msg = ctx.history[idx];
+      if (!msg?.timestamp) return 'unknown';
+      return new Date(msg.timestamp).toLocaleTimeString();
+    },
+  });
+
+  register({
+    name: 'messagedate',
+    aliases: [],
+    description: '메시지 날짜 반환',
+    callback: (args, ctx) => {
+      const idx = Number(args[0] ?? ctx.chatID);
+      const msg = ctx.history[idx];
+      if (!msg?.timestamp) return 'unknown';
+      return new Date(msg.timestamp).toLocaleDateString();
+    },
+  });
+
+  // ===== 배열 확장 =====
+
+  register({
+    name: 'arraysplice',
+    aliases: [],
+    description: '배열에서 요소 제거/추가',
+    callback: (args) => {
+      const arr = parseArraySafe(args[0]);
+      const start = Number(args[1] ?? 0);
+      const deleteCount = Number(args[2] ?? 1);
+      const items = args.slice(3);
+      arr.splice(start, deleteCount, ...items);
+      return JSON.stringify(arr);
+    },
+  });
+
+  register({
+    name: 'spread',
+    aliases: [],
+    description: '배열 요소를 분리하여 반환',
+    callback: (args) => {
+      const arr = parseArraySafe(args[0]);
+      const separator = args[1] ?? ', ';
+      return arr.join(separator);
+    },
+  });
+
+  register({
+    name: 'filter',
+    aliases: [],
+    description: '배열 필터링 (표현식 평가)',
+    callback: (args, ctx, vars) => {
+      const arr = parseArraySafe(args[0]);
+      const condition = args[1] ?? '';
+      const filtered = arr.filter((item, idx) => {
+        // 간단한 조건 평가
+        const evaluated = condition
+          .replace(/\$item/g, String(item))
+          .replace(/\$index/g, String(idx));
+        return evaluated === '1' || evaluated === 'true';
+      });
+      return JSON.stringify(filtered);
+    },
+  });
+
+  register({
+    name: 'all',
+    aliases: [],
+    description: '모든 요소가 조건 충족하는지 확인',
+    callback: (args) => {
+      const arr = parseArraySafe(args[0]);
+      return arr.every(v => v === '1' || v === 'true' || v === true) ? '1' : '0';
+    },
+  });
+
+  register({
+    name: 'any',
+    aliases: [],
+    description: '하나라도 조건 충족하는지 확인',
+    callback: (args) => {
+      const arr = parseArraySafe(args[0]);
+      return arr.some(v => v === '1' || v === 'true' || v === true) ? '1' : '0';
+    },
+  });
+
+  register({
+    name: 'range',
+    aliases: [],
+    description: '범위 배열 생성',
+    callback: (args) => {
+      const start = Number(args[0] ?? 0);
+      const end = Number(args[1] ?? 10);
+      const step = Number(args[2] ?? 1);
+      const result: number[] = [];
+      for (let i = start; i < end; i += step) {
+        result.push(i);
+      }
+      return JSON.stringify(result);
+    },
+  });
+
+  register({
+    name: 'reverse',
+    aliases: [],
+    description: '배열/문자열 뒤집기',
+    callback: (args) => {
+      const input = args[0] ?? '';
+      if (input.startsWith('[') && input.endsWith(']')) {
+        const arr = parseArraySafe(input);
+        return JSON.stringify(arr.reverse());
+      }
+      return input.split('').reverse().join('');
+    },
+  });
+
+  // ===== 유니코드/인코딩 =====
+
+  register({
+    name: 'unicodeencode',
+    aliases: ['ue'],
+    description: '유니코드 인코딩',
+    callback: (args) => {
+      const str = args[0] ?? '';
+      return str.split('').map(c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
+    },
+  });
+
+  register({
+    name: 'unicodedecode',
+    aliases: ['u'],
+    description: '유니코드 디코딩',
+    callback: (args) => {
+      const str = args[0] ?? '';
+      return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => 
+        String.fromCharCode(parseInt(hex, 16))
+      );
+    },
+  });
+
+  register({
+    name: 'tohex',
+    aliases: [],
+    description: '16진수로 변환',
+    callback: (args) => Number(args[0] ?? 0).toString(16),
+  });
+
+  register({
+    name: 'fromhex',
+    aliases: [],
+    description: '16진수에서 변환',
+    callback: (args) => parseInt(args[0] ?? '0', 16).toString(),
+  });
+
+  register({
+    name: 'hash',
+    aliases: [],
+    description: '간단한 해시 생성',
+    callback: (args) => {
+      const str = args[0] ?? '';
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      return Math.abs(hash).toString();
+    },
+  });
+
+  register({
+    name: 'tonumber',
+    aliases: [],
+    description: '숫자로 변환',
+    callback: (args) => {
+      const num = Number(args[0] ?? 0);
+      return isNaN(num) ? '0' : num.toString();
+    },
+  });
+
+  // ===== 주사위/확률 =====
+
+  register({
+    name: 'dice',
+    aliases: [],
+    description: '주사위 굴리기 (XdY+Z 형식)',
+    callback: (args) => {
+      const notation = args[0] ?? '1d6';
+      const match = notation.match(/^(\d*)d(\d+)([+-]\d+)?$/i);
+      if (!match) return 'NaN';
+      
+      const num = Number(match[1] || 1);
+      const sides = Number(match[2]);
+      const modifier = Number(match[3] || 0);
+      
+      let total = modifier;
+      for (let i = 0; i < num; i++) {
+        total += Math.floor(Math.random() * sides) + 1;
+      }
+      return total.toString();
+    },
+  });
+
+  register({
+    name: 'pick',
+    aliases: [],
+    description: '일관된 랜덤 선택 (시드 기반)',
+    callback: (args, ctx) => {
+      const seed = args[0] ?? '';
+      const choices = args.slice(1);
+      if (choices.length === 0) return '';
+      
+      // 간단한 해시 기반 선택
+      let hash = 0;
+      for (let i = 0; i < seed.length; i++) {
+        hash = ((hash << 5) - hash) + seed.charCodeAt(i);
+        hash = hash & hash;
+      }
+      const idx = Math.abs(hash) % choices.length;
+      return choices[idx];
+    },
+  });
+
+  register({
+    name: 'rollp',
+    aliases: [],
+    description: '영구 주사위 (한번만 굴림)',
+    callback: (args, ctx, vars) => {
+      const key = `__rollp_${args[0] ?? 'default'}__`;
+      if (vars[key]) return vars[key];
+      
+      const notation = args[1] ?? '1d6';
+      const match = notation.match(/^(\d*)d(\d+)([+-]\d+)?$/i);
+      if (!match) return 'NaN';
+      
+      const num = Number(match[1] || 1);
+      const sides = Number(match[2]);
+      const modifier = Number(match[3] || 0);
+      
+      let total = modifier;
+      for (let i = 0; i < num; i++) {
+        total += Math.floor(Math.random() * sides) + 1;
+      }
+      
+      vars[key] = total.toString();
+      return { text: total.toString(), var: vars };
+    },
+  });
+
+  // ===== 이스케이프 문자 확장 =====
+
+  register({
+    name: 'displayescapedbracketopen',
+    aliases: ['debo'],
+    description: '이스케이프된 [ 반환',
+    callback: () => '\uE9ba',
+  });
+
+  register({
+    name: 'displayescapedbracketclose',
+    aliases: ['debc'],
+    description: '이스케이프된 ] 반환',
+    callback: () => '\uE9bb',
+  });
+
+  register({
+    name: 'displayescapedanglebracketopen',
+    aliases: ['deabo'],
+    description: '이스케이프된 < 반환',
+    callback: () => '\uE9bc',
+  });
+
+  register({
+    name: 'displayescapedanglebracketclose',
+    aliases: ['deabc'],
+    description: '이스케이프된 > 반환',
+    callback: () => '\uE9bd',
+  });
+
+  register({
+    name: 'displayescapedcolon',
+    aliases: ['dec'],
+    description: '이스케이프된 : 반환',
+    callback: () => '\uE9be',
+  });
+
+  register({
+    name: 'displayescapedsemicolon',
+    aliases: ['des'],
+    description: '이스케이프된 ; 반환',
+    callback: () => '\uE9bf',
+  });
+
+  register({
+    name: 'cbr',
+    aliases: [],
+    description: '조건부 줄바꿈',
+    callback: (args) => args[0] === '1' ? '\n' : '',
+  });
+
+  // ===== 오류 처리 =====
+
+  register({
+    name: 'iserror',
+    aliases: [],
+    description: '값이 에러인지 확인',
+    callback: (args) => {
+      const val = args[0] ?? '';
+      return val === 'NaN' || val === 'null' || val === 'undefined' || val === 'error' ? '1' : '0';
+    },
+  });
+
+  // ===== XOR 암호화 =====
+
+  register({
+    name: 'xor',
+    aliases: [],
+    description: 'XOR 암호화',
+    callback: (args) => {
+      const text = args[0] ?? '';
+      const key = args[1] ?? '';
+      if (!key) return text;
+      
+      let result = '';
+      for (let i = 0; i < text.length; i++) {
+        result += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+      }
+      return btoa(result);
+    },
+  });
+
+  register({
+    name: 'xordecrypt',
+    aliases: [],
+    description: 'XOR 복호화',
+    callback: (args) => {
+      const encoded = args[0] ?? '';
+      const key = args[1] ?? '';
+      if (!key) return encoded;
+      
+      try {
+        const text = atob(encoded);
+        let result = '';
+        for (let i = 0; i < text.length; i++) {
+          result += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+        }
+        return result;
+      } catch {
+        return '';
+      }
+    },
+  });
+
+  // ===== 디스플레이 전용 =====
+
+  register({
+    name: 'tex',
+    aliases: ['latex'],
+    description: 'LaTeX 수식 표시',
+    callback: (args, ctx) => {
+      if (!ctx.displaying) return '';
+      return `<span class="risu-tex">${args[0] ?? ''}</span>`;
+    },
+  });
+
+  register({
+    name: 'ruby',
+    aliases: [],
+    description: '루비 텍스트 표시',
+    callback: (args, ctx) => {
+      if (!ctx.displaying) return args[0] ?? '';
+      return `<ruby>${args[0] ?? ''}<rp>(</rp><rt>${args[1] ?? ''}</rt><rp>)</rp></ruby>`;
+    },
+  });
+
+  register({
+    name: 'codeblock',
+    aliases: [],
+    description: '코드 블록 표시',
+    callback: (args, ctx) => {
+      if (!ctx.displaying) return args[0] ?? '';
+      const lang = args[1] ?? '';
+      return `<pre><code class="language-${lang}">${args[0] ?? ''}</code></pre>`;
+    },
+  });
+
+  register({
+    name: 'button',
+    aliases: [],
+    description: '버튼 표시 (디스플레이 전용)',
+    callback: (args, ctx) => {
+      if (!ctx.displaying) return '';
+      const label = args[0] ?? 'Button';
+      const action = args[1] ?? '';
+      return `<button class="risu-button" data-action="${action}">${label}</button>`;
+    },
+  });
+
+  // ===== 에셋 =====
+
+  register({
+    name: 'asset',
+    aliases: [],
+    description: '에셋 표시',
+    callback: () => '', // 시뮬레이터에서는 빈 문자열
+  });
+
+  register({
+    name: 'emotion',
+    aliases: [],
+    description: '감정 에셋 표시',
+    callback: () => '',
+  });
+
+  register({
+    name: 'audio',
+    aliases: [],
+    description: '오디오 에셋 재생',
+    callback: () => '',
+  });
+
+  register({
+    name: 'bg',
+    aliases: ['background'],
+    description: '배경 설정',
+    callback: () => '',
+  });
+
+  register({
+    name: 'bgm',
+    aliases: [],
+    description: '배경음악 재생',
+    callback: () => '',
+  });
+
+  register({
+    name: 'video',
+    aliases: [],
+    description: '비디오 재생',
+    callback: () => '',
+  });
+
+  register({
+    name: 'image',
+    aliases: ['img'],
+    description: '이미지 표시',
+    callback: () => '',
+  });
+
+  register({
+    name: 'inlay',
+    aliases: [],
+    description: '인레이 표시',
+    callback: () => '',
+  });
+
+  // ===== 조건부 블록 (doc_only) =====
+
+  register({
+    name: '#if',
+    aliases: [],
+    description: '조건부 블록',
+    callback: 'doc_only',
+  });
+
+  register({
+    name: '#if_pure',
+    aliases: [],
+    description: '순수 조건부 블록',
+    callback: 'doc_only',
+  });
+
+  register({
+    name: '#when',
+    aliases: [],
+    description: 'when 조건부 블록',
+    callback: 'doc_only',
+  });
+
+  register({
+    name: ':else',
+    aliases: [],
+    description: 'else 블록',
+    callback: 'doc_only',
+  });
+
+  register({
+    name: '#pure',
+    aliases: [],
+    description: '순수 블록 (CBS 평가 안함)',
+    callback: 'doc_only',
+  });
+
+  register({
+    name: '#puredisplay',
+    aliases: [],
+    description: '디스플레이 순수 블록',
+    callback: 'doc_only',
+  });
+
+  register({
+    name: '#each',
+    aliases: [],
+    description: '반복 블록',
+    callback: 'doc_only',
+  });
+
+  // ===== 기타 =====
+
+  register({
+    name: 'risu',
+    aliases: [],
+    description: 'RisuAI 정보 반환',
+    callback: () => 'RisuStudio',
+  });
+
+  register({
+    name: '?',
+    aliases: [],
+    description: '조건 연산자',
+    callback: (args) => args[0] === '1' ? (args[1] ?? '') : (args[2] ?? ''),
+  });
+
+  register({
+    name: '__',
+    aliases: [],
+    description: '빈 줄 (디스플레이용)',
+    callback: () => '\n\n',
+  });
+
+  register({
+    name: 'trigger_id',
+    aliases: ['triggerid'],
+    description: '트리거 ID 반환',
+    callback: (args, ctx) => ctx.triggerId ?? 'null',
+  });
+
+  register({
+    name: 'prefillsupported',
+    aliases: [],
+    description: '프리필 지원 여부',
+    callback: () => '0', // 시뮬레이터에서는 지원 안함
+  });
+
+  register({
+    name: 'screenwidth',
+    aliases: [],
+    description: '화면 너비',
+    callback: () => typeof window !== 'undefined' ? window.innerWidth.toString() : '1920',
+  });
+
+  register({
+    name: 'screenheight',
+    aliases: [],
+    description: '화면 높이',
+    callback: () => typeof window !== 'undefined' ? window.innerHeight.toString() : '1080',
+  });
+
+  register({
+    name: 'emotionlist',
+    aliases: [],
+    description: '감정 목록 반환',
+    callback: (args, ctx) => JSON.stringify(ctx.char.emotionList ?? []),
+  });
+
+  register({
+    name: 'assetlist',
+    aliases: [],
+    description: '에셋 목록 반환',
+    callback: (args, ctx) => JSON.stringify(ctx.char.assets ?? []),
+  });
+
+  register({
+    name: 'moduleenabled',
+    aliases: [],
+    description: '모듈 활성화 여부',
+    callback: (args, ctx) => {
+      const moduleName = args[0] ?? '';
+      return ctx.enabledModules?.includes(moduleName) ? '1' : '0';
+    },
+  });
+
+  register({
+    name: 'bkspc',
+    aliases: ['backspace'],
+    description: '백스페이스 (마지막 문자 제거)',
+    callback: (args) => {
+      const count = Number(args[0] ?? 1);
+      return '\b'.repeat(count);
+    },
+  });
+
+  register({
+    name: 'erase',
+    aliases: [],
+    description: '텍스트 지우기',
+    callback: () => '',
+  });
+
+  register({
+    name: 'hiddenkey',
+    aliases: [],
+    description: '숨김 키',
+    callback: () => '',
+  });
+
   return commands;
 }
 
