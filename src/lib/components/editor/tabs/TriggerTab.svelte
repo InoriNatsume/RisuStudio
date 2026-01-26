@@ -15,6 +15,12 @@
   let typeFilter = 'all';
   let dslEditor: DSLEditor;
   let displayMode: 'all' | 'single' = 'all';  // 전체 보기 vs 개별 보기
+  
+  // 코드 검색
+  let codeSearchQuery = '';
+  let codeSearchVisible = false;
+  let codeSearchResultCount = 0;
+  let codeSearchCurrentIndex = 0;
 
   // Trigger 타입 목록 (RisuAI 스키마)
   const triggerTypes = [
@@ -331,11 +337,43 @@
         {/if}
       </div>
       <div class="toolbar-right">
+        <button class="tool-btn" class:active={codeSearchVisible} on:click={() => { codeSearchVisible = !codeSearchVisible; if (!codeSearchVisible) codeSearchQuery = ''; }} title="검색 (Ctrl+F)">🔍</button>
         <button class="tool-btn" on:click={copyToClipboard} title="복사">📋</button>
         <button class="tool-btn" on:click={pasteFromClipboard} title="붙여넣기">📄</button>
         <button class="tool-btn apply-btn" on:click={applyDSL} title="적용">✓ 적용</button>
       </div>
     </div>
+    
+    <!-- 코드 검색 바 -->
+    {#if codeSearchVisible}
+      <div class="code-search-bar">
+        <input
+          type="text"
+          class="code-search-input"
+          placeholder="검색..."
+          bind:value={codeSearchQuery}
+          on:keydown={(e) => {
+            if (e.key === 'Enter') {
+              if (e.shiftKey) dslEditor?.prevSearchResult();
+              else dslEditor?.nextSearchResult();
+            } else if (e.key === 'Escape') {
+              codeSearchVisible = false;
+              codeSearchQuery = '';
+            }
+          }}
+        />
+        <span class="code-search-count">
+          {#if codeSearchQuery && codeSearchResultCount > 0}
+            {codeSearchCurrentIndex + 1}/{codeSearchResultCount}
+          {:else if codeSearchQuery}
+            0/0
+          {/if}
+        </span>
+        <button class="code-search-nav" on:click={() => dslEditor?.prevSearchResult()} title="이전 (Shift+Enter)">▲</button>
+        <button class="code-search-nav" on:click={() => dslEditor?.nextSearchResult()} title="다음 (Enter)">▼</button>
+        <button class="code-search-close" on:click={() => { codeSearchVisible = false; codeSearchQuery = ''; }}>×</button>
+      </div>
+    {/if}
     
     <div class="editor-wrapper">
       {#if viewMode === 'dsl'}
@@ -344,6 +382,9 @@
           value={dslText}
           mode="trigger"
           placeholder={'===\nname = "트리거 이름"\ntype = "manual"\nactive = "true"\neffect = \'[{"type":"setvar","var":"count","value":"1","operator":"="}]\''}
+          searchQuery={codeSearchQuery}
+          bind:searchResultCount={codeSearchResultCount}
+          bind:currentSearchIndex={codeSearchCurrentIndex}
           on:change={handleDSLChange}
         />
       {:else}
@@ -698,5 +739,70 @@
 
   .entry-flag.low-level {
     color: #fbbf24;
+  }
+
+  /* 코드 검색 바 스타일 */
+  .code-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: var(--risu-theme-darkbg, #1a1a1a);
+    border-bottom: 1px solid var(--risu-theme-borderc, #333);
+  }
+
+  .code-search-input {
+    flex: 1;
+    padding: 0.4rem 0.75rem;
+    background: var(--risu-theme-bgcolor, #141414);
+    color: var(--risu-theme-textcolor, #fff);
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 4px;
+    font-size: 0.8rem;
+  }
+
+  .code-search-input:focus {
+    outline: none;
+    border-color: var(--risu-theme-primary, #4a9eff);
+  }
+
+  .code-search-count {
+    font-size: 0.75rem;
+    color: var(--risu-theme-textcolor2, #888);
+    min-width: 50px;
+    text-align: center;
+  }
+
+  .code-search-nav {
+    padding: 0.25rem 0.5rem;
+    background: transparent;
+    color: var(--risu-theme-textcolor, #fff);
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.7rem;
+  }
+
+  .code-search-nav:hover {
+    background: var(--risu-theme-primary, #4a9eff);
+    border-color: var(--risu-theme-primary, #4a9eff);
+  }
+
+  .code-search-close {
+    padding: 0.25rem 0.5rem;
+    background: transparent;
+    color: var(--risu-theme-textcolor2, #888);
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  .code-search-close:hover {
+    color: var(--risu-theme-textcolor, #fff);
+  }
+
+  .tool-btn.active {
+    background: var(--risu-theme-primary, #4a9eff);
+    color: white;
   }
 </style>

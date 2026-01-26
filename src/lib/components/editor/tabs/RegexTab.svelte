@@ -16,6 +16,12 @@
   let dslEditor: DSLEditor;
   let displayMode: 'all' | 'single' = 'all';  // 전체 보기 vs 개별 보기
 
+  // 코드 에디터 내 검색
+  let codeSearchQuery = '';
+  let codeSearchVisible = false;
+  let codeSearchResultCount = 0;
+  let codeSearchCurrentIndex = 0;
+
   // Regex 타입 목록 (RisuAI 스키마)
   const regexTypes = [
     { value: 'all', label: '전체' },
@@ -70,23 +76,30 @@
       
       // pattern (in)
       if (entry.in) {
-        if (entry.in.includes('\n')) {
+        const pattern = entry.in;
+        // 긴 문자열(100자 이상)이거나 줄바꿈이 있으면 멀티라인 사용
+        if (pattern.includes('\n') || pattern.length > 100) {
           lines.push(`pattern = '''`);
-          lines.push(entry.in);
+          lines.push(pattern);
           lines.push(`'''`);
         } else {
-          lines.push(`pattern = "${escapeQuotes(entry.in)}"`);
+          lines.push(`pattern = "${escapeQuotes(pattern)}"`);
         }
       }
       
       // replace (out)
       if (entry.out) {
-        if (entry.out.includes('\n')) {
+        const replace = entry.out;
+        // 긴 문자열(100자 이상), 줄바꿈이 있거나, HTML 태그가 있으면 멀티라인 + 포맷팅
+        const shouldFormat = replace.includes('\n') || replace.length > 100 || replace.includes('<');
+        if (shouldFormat) {
           lines.push(`replace = '''`);
-          lines.push(entry.out);
+          // HTML 포맷팅: 주요 태그 앞에 줄바꿈 추가
+          const formatted = formatLongString(replace);
+          lines.push(formatted);
           lines.push(`'''`);
         } else {
-          lines.push(`replace = "${escapeQuotes(entry.out)}"`);
+          lines.push(`replace = "${escapeQuotes(replace)}"`);
         }
       }
       
@@ -95,6 +108,27 @@
       
       return lines.join('\n');
     }).join('\n\n');
+  }
+
+  /** 긴 HTML 문자열을 읽기 좋게 포맷팅 */
+  function formatLongString(str: string): string {
+    // 이미 줄바꿈이 있으면 그대로 반환
+    if (str.includes('\n')) return str;
+    
+    // HTML 태그가 없으면 그대로 반환
+    if (!str.includes('<')) return str;
+    
+    // 주요 블록 태그 앞에 줄바꿈 추가
+    let formatted = str
+      .replace(/></g, '>\n<')  // 태그 사이에 줄바꿈
+      .replace(/(<\/div>)/gi, '$1\n')  // div 닫기 후 줄바꿈
+      .replace(/(<div)/gi, '\n$1')  // div 시작 전 줄바꿈
+      .replace(/(<style)/gi, '\n$1')  // style 시작 전 줄바꿈
+      .replace(/(<\/style>)/gi, '$1\n')  // style 닫기 후 줄바꿈
+      .replace(/\n\n+/g, '\n')  // 중복 줄바꿈 제거
+      .trim();
+    
+    return formatted;
   }
 
   function dslToRegex(dsl: string): any[] {
@@ -273,11 +307,38 @@
         {/if}
       </div>
       <div class="toolbar-right">
+        <button class="tool-btn" on:click={() => codeSearchVisible = !codeSearchVisible} title="코드 검색" class:active={codeSearchVisible}>🔍</button>
         <button class="tool-btn" on:click={copyToClipboard} title="복사">📋</button>
         <button class="tool-btn" on:click={pasteFromClipboard} title="붙여넣기">📄</button>
         <button class="tool-btn apply-btn" on:click={applyDSL} title="적용">✓ 적용</button>
       </div>
     </div>
+    
+    <!-- 코드 검색 바 -->
+    {#if codeSearchVisible}
+      <div class="code-search-bar">
+        <input
+          type="text"
+          class="code-search-input"
+          placeholder="코드 내 검색..."
+          bind:value={codeSearchQuery}
+          on:keydown={(e) => {
+            if (e.key === 'Enter') dslEditor?.nextSearchResult();
+            else if (e.key === 'Escape') { codeSearchVisible = false; codeSearchQuery = ''; }
+          }}
+        />
+        <span class="code-search-count">
+          {#if codeSearchResultCount > 0}
+            {codeSearchCurrentIndex + 1} / {codeSearchResultCount}
+          {:else if codeSearchQuery}
+            0 / 0
+          {/if}
+        </span>
+        <button class="code-search-nav" on:click={() => dslEditor?.prevSearchResult()}>▲</button>
+        <button class="code-search-nav" on:click={() => dslEditor?.nextSearchResult()}>▼</button>
+        <button class="code-search-close" on:click={() => { codeSearchVisible = false; codeSearchQuery = ''; }}>✕</button>
+      </div>
+    {/if}
     
     <div class="editor-wrapper">
       {#if viewMode === 'dsl'}
@@ -285,6 +346,9 @@
           bind:this={dslEditor}
           value={dslText}
           mode="regex"
+          searchQuery={codeSearchQuery}
+          bind:searchResultCount={codeSearchResultCount}
+          bind:currentSearchIndex={codeSearchCurrentIndex}
           placeholder={'===\nname = "Regex 이름"\ntype = "editdisplay"\npattern = "<img mps=\"(.*?)\">"\nreplace = \'\'\'\n대체 문자열\n\'\'\''}
           on:change={handleDSLChange}
         />
@@ -633,5 +697,144 @@
     font-size: 0.625rem;
     color: var(--risu-theme-textcolor2, #888);
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  /* 미리보기 섹션 */
+  .preview-section {
+    border-top: 1px solid var(--risu-theme-borderc, #444);
+    display: flex;
+    flex-direction: column;
+    max-height: 300px;
+  }
+
+  .preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    background: var(--risu-theme-darkbg, #252525);
+    font-size: 0.75rem;
+    color: var(--risu-theme-textcolor2, #888);
+  }
+
+  .preview-toggle {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.625rem;
+    background: var(--risu-theme-primary-600, #4682B4);
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .preview-toggle:hover {
+    background: var(--risu-theme-primary-700, #3a6d9e);
+  }
+
+  .preview-content {
+    flex: 1;
+    overflow: auto;
+    padding: 0.5rem;
+    background: var(--risu-theme-bgcolor, #1a1a1a);
+  }
+
+  .html-preview {
+    background: white;
+    color: black;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    max-height: 200px;
+    overflow: auto;
+  }
+
+  .code-preview {
+    font-size: 0.75rem;
+  }
+
+  .preview-label {
+    color: var(--risu-theme-textcolor2, #888);
+    font-size: 0.625rem;
+    margin-bottom: 0.25rem;
+    text-transform: uppercase;
+  }
+
+  .preview-code {
+    background: rgba(0,0,0,0.3);
+    padding: 0.5rem;
+    border-radius: 4px;
+    margin: 0 0 0.5rem 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.6875rem;
+    color: var(--risu-theme-textcolor, #fff);
+    max-height: 100px;
+    overflow: auto;
+  }
+
+  /* 코드 검색 바 스타일 */
+  .code-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: var(--risu-theme-darkbg, #1a1a1a);
+    border-bottom: 1px solid var(--risu-theme-borderc, #333);
+  }
+
+  .code-search-input {
+    flex: 1;
+    padding: 0.4rem 0.75rem;
+    background: var(--risu-theme-bgcolor, #141414);
+    color: var(--risu-theme-textcolor, #fff);
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 4px;
+    font-size: 0.8rem;
+  }
+
+  .code-search-input:focus {
+    outline: none;
+    border-color: var(--risu-theme-primary, #4a9eff);
+  }
+
+  .code-search-count {
+    font-size: 0.75rem;
+    color: var(--risu-theme-textcolor2, #888);
+    min-width: 50px;
+    text-align: center;
+  }
+
+  .code-search-nav {
+    padding: 0.25rem 0.5rem;
+    background: transparent;
+    color: var(--risu-theme-textcolor, #fff);
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.7rem;
+  }
+
+  .code-search-nav:hover {
+    background: var(--risu-theme-primary, #4a9eff);
+    border-color: var(--risu-theme-primary, #4a9eff);
+  }
+
+  .code-search-close {
+    padding: 0.25rem 0.5rem;
+    background: transparent;
+    color: var(--risu-theme-textcolor2, #888);
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  .code-search-close:hover {
+    color: var(--risu-theme-textcolor, #fff);
+  }
+
+  .tool-btn.active {
+    background: var(--risu-theme-primary, #4a9eff);
+    color: white;
   }
 </style>

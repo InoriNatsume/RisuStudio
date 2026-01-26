@@ -2,18 +2,24 @@
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, ViewPlugin, Decoration, WidgetType } from '@codemirror/view';
   import type { DecorationSet } from '@codemirror/view';
-  import { EditorState, RangeSetBuilder } from '@codemirror/state';
+  import { EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
   import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 
   export let value: string = '';
   export let mode: 'lorebook' | 'regex' | 'trigger' = 'lorebook';
   export let placeholder: string = '';
+  export let searchQuery: string = '';  // 외부에서 전달받는 검색어
 
   const dispatch = createEventDispatcher();
   
   let containerRef: HTMLDivElement;
   let editorView: EditorView | null = null;
   let isInternalUpdate = false;
+  
+  // 검색 결과
+  export let searchResultCount = 0;
+  export let currentSearchIndex = 0;
+  let searchMatches: { from: number; to: number; line: number }[] = [];
 
   // ModuleManager 색상 (createDarkTheme 참고)
   const RAINBOW_COLORS = ['#E06C75', '#E5C07B', '#61AFEF', '#C678DD', '#56B6C2'];
@@ -74,7 +80,40 @@
       color: '#4A90D9',
       fontWeight: 'bold',
       textShadow: '0 0 8px rgba(74, 144, 217, 0.5)'
+    },
+    // 검색 하이라이트 스타일
+    '.cm-searchMatch': {
+      backgroundColor: 'rgba(255, 213, 0, 0.4)',
+      borderRadius: '2px'
+    },
+    '.cm-searchMatch-current': {
+      backgroundColor: 'rgba(255, 165, 0, 0.6)',
+      borderRadius: '2px',
+      outline: '1px solid #ffa500'
     }
+  });
+
+  // 검색 하이라이트용 StateEffect와 StateField
+  const setSearchHighlights = StateEffect.define<{ from: number; to: number }[]>();
+  
+  const searchHighlightField = StateField.define<DecorationSet>({
+    create() {
+      return Decoration.none;
+    },
+    update(highlights, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(setSearchHighlights)) {
+          const builder = new RangeSetBuilder<Decoration>();
+          const sorted = [...effect.value].sort((a, b) => a.from - b.from);
+          for (const { from, to } of sorted) {
+            builder.add(from, to, Decoration.mark({ class: 'cm-searchMatch' }));
+          }
+          return builder.finish();
+        }
+      }
+      return highlights.map(tr.changes);
+    },
+    provide: f => EditorView.decorations.from(f)
   });
 
   // === 구분선 위젯
@@ -322,6 +361,7 @@
         keymap.of([...defaultKeymap, ...historyKeymap]),
         darkTheme,
         cbsPlugin,
+        searchHighlightField,  // 검색 하이라이트
         updateListener,
         EditorView.lineWrapping
       ]
@@ -344,6 +384,73 @@
       changes: { from: 0, to: editorView.state.doc.length, insert: value }
     });
     isInternalUpdate = false;
+  }
+
+  // 검색어 변경 시 매칭 업데이트 및 하이라이트
+  $: if (editorView && searchQuery !== undefined) {
+    updateSearchHighlights(searchQuery);
+  }
+
+  function updateSearchHighlights(query: string) {
+    if (!editorView) return;
+    
+    searchMatches = [];
+    if (!query) {
+      searchResultCount = 0;
+      currentSearchIndex = 0;
+      // 하이라이트 제거
+      editorView.dispatch({
+        effects: setSearchHighlights.of([])
+      });
+      return;
+    }
+    
+    const text = editorView.state.doc.toString();
+    const lowerQuery = query.toLowerCase();
+    const lowerText = text.toLowerCase();
+    let pos = 0;
+    
+    while ((pos = lowerText.indexOf(lowerQuery, pos)) !== -1) {
+      const line = editorView.state.doc.lineAt(pos);
+      searchMatches.push({
+        from: pos,
+        to: pos + query.length,
+        line: line.number
+      });
+      pos += 1;
+    }
+    
+    searchResultCount = searchMatches.length;
+    currentSearchIndex = searchMatches.length > 0 ? 0 : -1;
+    
+    // 하이라이트 적용
+    editorView.dispatch({
+      effects: setSearchHighlights.of(searchMatches.map(m => ({ from: m.from, to: m.to })))
+    });
+    
+    // 첫 번째 결과로 스크롤
+    if (searchMatches.length > 0) {
+      goToSearchResult(0);
+    }
+  }
+
+  export function goToSearchResult(index: number) {
+    if (!editorView || searchMatches.length === 0) return;
+    currentSearchIndex = ((index % searchMatches.length) + searchMatches.length) % searchMatches.length;
+    const match = searchMatches[currentSearchIndex];
+    
+    editorView.dispatch({
+      selection: { anchor: match.from, head: match.to },
+      effects: EditorView.scrollIntoView(match.from, { y: 'center' })
+    });
+  }
+
+  export function nextSearchResult() {
+    goToSearchResult(currentSearchIndex + 1);
+  }
+
+  export function prevSearchResult() {
+    goToSearchResult(currentSearchIndex - 1);
   }
 
   export function scrollToLine(lineNumber: number) {

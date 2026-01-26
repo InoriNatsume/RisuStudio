@@ -54,7 +54,16 @@
   function getCharxFields(data: any) {
     const card = data.card || data;
     const cardData = card.data || card;
+    
+    // RisuAI 확장 필드 (backgroundHTML 등)
+    const risuExt = cardData.extensions?.risuai || {};
+    const additionalData = risuExt.additionalData || {};
+    
+    // backgroundHTML은 캐릭터에서 backgroundEmbedding에 해당
+    const backgroundHTML = cardData.backgroundHTML || additionalData.backgroundHTML || '';
+    
     return [
+      // 기본 필드
       { key: 'name', label: '이름', type: 'text', value: cardData.name || '', section: 'basic' },
       { key: 'description', label: '설명', type: 'textarea', value: cardData.description || '', section: 'basic' },
       { key: 'personality', label: '성격', type: 'textarea', value: cardData.personality || '', section: 'basic' },
@@ -64,6 +73,9 @@
       { key: 'creator_notes', label: '제작자 노트', type: 'textarea', value: cardData.creator_notes || '', section: 'basic' },
       { key: 'system_prompt', label: '시스템 프롬프트', type: 'textarea', value: cardData.system_prompt || '', section: 'basic' },
       { key: 'post_history_instructions', label: '후기록 지시', type: 'textarea', value: cardData.post_history_instructions || '', section: 'basic' },
+      
+      // RisuAI 확장 필드
+      { key: 'backgroundHTML', label: '백그라운드 임베딩', type: 'code', value: backgroundHTML, section: 'advanced' },
     ];
   }
 
