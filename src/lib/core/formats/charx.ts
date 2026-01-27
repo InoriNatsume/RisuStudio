@@ -6,6 +6,7 @@
  */
 
 import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate';
+import JSZip from 'jszip';
 import type { CharacterCardV3, CharacterCard } from '../types/character';
 import { logger } from '../logger';
 
@@ -29,6 +30,21 @@ export class CharxParseError extends Error {
 }
 
 /**
+ * ZIP 시그니처(PK) 위치 찾기
+ * charx 파일이 JPEG/PNG 앞에 붙어있을 수 있음
+ */
+function findZipStart(data: Uint8Array): number {
+  // ZIP 로컬 파일 헤더 시그니처: 0x504b0304 ("PK\x03\x04")
+  for (let i = 0; i < data.length - 4; i++) {
+    if (data[i] === 0x50 && data[i + 1] === 0x4b && 
+        data[i + 2] === 0x03 && data[i + 3] === 0x04) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
  * .charx 파일 파싱
  * @param data charx 파일 바이트 데이터
  * @returns 파싱된 캐릭터 카드와 에셋
@@ -37,8 +53,21 @@ export async function parseCharx(data: Uint8Array): Promise<CharxResult> {
   logger.debug('charx', '파싱 시작', { size: data.length });
   
   try {
+    // ZIP 시그니처 위치 찾기 (JPEG/PNG + ZIP 형태 지원)
+    let zipData = data;
+    const zipStart = findZipStart(data);
+    
+    if (zipStart === -1) {
+      throw new CharxParseError('Invalid charx: ZIP signature not found');
+    }
+    
+    if (zipStart > 0) {
+      logger.debug('charx', 'ZIP 시그니처 발견', { offset: zipStart });
+      zipData = data.slice(zipStart);
+    }
+    
     // 동기 unzip 사용 (더 안정적)
-    const files = unzipSync(data);
+    const files = unzipSync(zipData);
     
     logger.debug('charx', 'ZIP 해제 완료', { files: Object.keys(files) });
     

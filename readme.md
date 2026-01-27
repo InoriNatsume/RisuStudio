@@ -1,5 +1,6 @@
 # RisuStudio
 
+https://inorinatsume.github.io/RisuStudio/
 RisuAI 캐릭터 카드(.charx), 모듈(.risum), 프리셋(.risup) 뷰/편집. 편집기능은 아직 검증이 충분치 않음.
 AI 에이전트나 IDE를 통한 렌더링 연동, 깃 백업 관련으로 불편해서 잠정 중단. 뷰어/다운로드 용 및 차후 개발을 위해 기록으로 남겨둠.
 
@@ -90,7 +91,7 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 
 ## 📜 크레딧
 
-- **RisuAI** (GPL 3.0 License)
+- **RisuAI** (GPLv3)
   - https://github.com/kwaroran/RisuAI
 - **챈산 자료**: 
   - 모듈 매니저: https://arca.live/b/characterai/155936654. UI, CBS하이라이트, 자동완성, 유효성 검증 스키마 등등 매우 많음..
