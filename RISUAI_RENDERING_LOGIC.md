@@ -677,7 +677,156 @@ end)
 
 ---
 
+## ⚠️ 중요 발견: `'doc_only'` 함수와 parseAdditionalAssets
+
+### 문제
+
+CBS 함수 중 일부는 `'doc_only'`로 등록되어 있어서 CBS 파서가 직접 처리하지 않습니다:
+
+```typescript
+// cbs.ts에서 'doc_only'로 등록된 함수들
+registerCBS("asset::", 'doc_only');      // {{asset::name}}
+registerCBS("image::", 'doc_only');      // {{image::name}}  
+registerCBS("video::", 'doc_only');      // {{video::name}}
+registerCBS("audio::", 'doc_only');      // {{audio::name}}
+registerCBS("raw::", 'doc_only');        // {{raw::name}}
+registerCBS("inlay::", 'doc_only');      // {{inlay::id}}
+```
+
+### 실제 처리 위치
+
+이 함수들은 `parser.svelte.ts`의 `parseAdditionalAssets()` 함수에서 처리됩니다:
+
+```typescript
+// parser.svelte.ts:464
+export function parseAdditionalAssets(data: string, char: any) {
+    // {{asset::name}} → <img src="data:...">
+    data = data.replace(/\{\{(asset|image|video|audio|raw)::([^}]+)\}\}/gi, (match, type, name) => {
+        const asset = findAsset(char, name);
+        if (!asset) return '';
+        
+        if (type === 'raw') return asset.data;
+        
+        // 적절한 HTML 태그 생성
+        return `<img src="${asset.data}">`;
+    });
+    
+    return data;
+}
+```
+
+### 시뮬레이터에서의 대응
+
+```typescript
+// 렌더링 순서에 parseAdditionalAssets 반드시 포함!
+const render = async (input: string) => {
+    let output = input;
+    
+    // 1. Lua editDisplay (있으면)
+    output = runLuaEditTrigger(output);
+    
+    // 2. 첫 번째 에셋 치환 (CBS 전에!)
+    output = parseAdditionalAssets(output, character);
+    
+    // 3. CBS 처리
+    output = risuChatParser(output);
+    
+    // 4. Regex 적용
+    output = executeRegexScripts(output);
+    
+    // 5. 두 번째 에셋 치환 (Regex 후에!)
+    output = parseAdditionalAssets(output, character);
+    
+    return output;
+};
+```
+
+---
+
+## 🔴 아키텍처 결정: 시뮬레이터 분리
+
+### 결정 배경
+
+MANA App 캐릭터 테스트 중 CBS 조건문이 제대로 평가되지 않는 문제 발견:
+- `{{#when}}`, `{{#if}}` 조건들이 변수 부재로 모두 false 평가
+- 결과: 73,596자 → 5자로 축소
+
+근본 원인:
+1. CBS 변수 (`{{setvar::}}`, `{{getvar::}}`)는 **채팅 히스토리 컨텍스트**가 필요
+2. 시뮬레이터는 단일 메시지만 가지고 있어 **상태가 축적되지 않음**
+3. RisuAI는 실제 채팅 흐름에서 onOutput → onInput 트리거로 변수를 설정함
+
+### 결론
+
+**RisuStudio는 에디터로만 유지**, 시뮬레이터는 **별도 프로젝트로 분리**
+
+```
+RisuStudio (이 프로젝트)
+├── 캐릭터 카드 편집
+├── 스크립트 편집 (CBS, Regex, Trigger)
+├── 에셋 관리
+├── Import/Export (charx, risum, risup)
+└── 문법 검증/하이라이팅
+
+risu-simulator (별도 프로젝트)
+├── 완전한 채팅 시뮬레이션
+├── 채팅 히스토리 관리
+├── 변수 상태 추적
+├── Mock AI 응답
+└── 트리거 디버깅
+```
+
+### 시뮬레이터 제거 시 영향 분석
+
+#### 제거 대상 파일
+```
+src/routes/simulator/+page.svelte       # 시뮬레이터 페이지
+src/lib/components/simulator/           # 시뮬레이터 컴포넌트
+├── CBSDebugPanel.svelte
+├── index.ts
+├── PromptPreview.svelte
+├── RegexDebugPanel.svelte
+├── RenderPreview.svelte
+├── simulator.test.ts
+├── SimulatorPanel.svelte
+└── TriggerDebugPanel.svelte
+```
+
+#### 영향받는 파일
+```
+src/lib/components/editor/EditorScreen.svelte
+  - Line 15: import SimulatorPanel
+  - Line 464: <SimulatorPanel> 사용
+  → SimulatorPanel import/사용 제거 필요
+
+src/lib/core/cbs/                       # CBS 모듈
+  → 시뮬레이터 전용이면 제거 가능
+  → 다른 곳에서 사용하면 유지
+```
+
+#### 영향받지 않는 파일
+- 모든 편집 탭 (InfoTab, LoreTab, RegexTab, TriggerTab, ScriptTab 등)
+- 파일 포맷 처리 (charx.ts, risum.ts, risup.ts)
+- 메인 페이지 (+page.svelte)
+- 에셋 처리 (assetProcessor.ts)
+
+#### risuai 폴더 영향
+```
+src/lib/risuai/                         # RisuAI 원본 파일
+src/lib/risuai-adapter/                 # 어댑터 파일
+  → 시뮬레이터 전용이므로 함께 제거 가능
+  → 단, 향후 문법 검증용으로 유지할 수도 있음
+```
+
+---
+
 ## 📅 업데이트 이력
+
+- **2026-01-27 (2차)**: 아키텍처 결정 - 시뮬레이터 분리
+  - `'doc_only'` 함수와 parseAdditionalAssets 문서화
+  - MANA App 테스트 결과 분석 (변수 상태 문제)
+  - 시뮬레이터 제거 시 영향 분석 추가
+  - RisuStudio = 에디터 전용으로 결정
 
 - **2026-01-27**: Lua listenEdit 시스템 분석 완료, 실행 순서 문서화
   - processScriptFull 내부 순서 명확화 (Lua → CBS → Regex)

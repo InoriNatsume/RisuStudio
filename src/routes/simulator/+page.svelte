@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
-  import { risuChatParser, setSimulatorContext, setChatVar, getChatVar } from '$lib/core/cbs';
+  import { risuChatParser, setSimulatorContext, setChatVar, getChatVar, evaluateCBS } from '$lib/core/cbs';
 
   // 데이터
   let characterName = '';
@@ -154,6 +154,8 @@
       try {
         // 1. 플래그 처리 (RisuAI 방식)
         let flags = 'g';
+        const hasCbsFlag = script.flag?.includes('<cbs>');
+        
         if (script.ableFlag && script.flag) {
           // 메타 플래그 (<move_top>, <cbs> 등) 제거
           flags = script.flag.replace(/<[^>]+>/g, '');
@@ -166,14 +168,27 @@
           flags = 'u';
         }
         
-        // 2. 출력 템플릿 전처리 (RisuAI 방식)
+        // 2. 입력 패턴 전처리 - <cbs> 플래그가 있으면 CBS 파싱 적용 (RisuAI 방식)
+        let inPattern = script.in || '';
+        if (hasCbsFlag && inPattern) {
+          // CBS 파싱 적용
+          inPattern = evaluateCBS(inPattern);
+          console.log('[Simulator] <cbs> 플래그 - IN 패턴 CBS 처리:', script.comment || script.in?.substring(0, 30));
+        }
+        
+        // 빈 패턴이면 스킵
+        if (!inPattern || inPattern.trim() === '') {
+          continue;
+        }
+        
+        // 3. 출력 템플릿 전처리 (RisuAI 방식)
         let outTemplate = script.out || '';
         outTemplate = outTemplate.replaceAll('$n', '\n');  // $n → 줄바꿈
         // CBS 캡처 그룹 문법 변환: {{raw::$1}} → $1
         outTemplate = outTemplate.replace(/\{\{raw::\$(\d+)\}\}/g, '$$$1');
         
-        // 3. 정규식 생성 및 치환 (test() 없이 바로 replace)
-        const regex = new RegExp(script.in, flags);
+        // 4. 정규식 생성 및 치환 (test() 없이 바로 replace)
+        const regex = new RegExp(inPattern, flags);
         const before = result;
         result = result.replace(regex, outTemplate);
         
@@ -221,6 +236,96 @@
   }
 
   // 에셋 URL 치환 (RisuAI 방식)
+  // RisuAI parseAdditionalAssets 구현
+  // {{asset::name}}, {{image::name}}, {{raw::name}}, {{video::name}}, {{audio::name}} 등 처리
+  function parseAdditionalAssets(html: string): string {
+    if (!html) return html;
+    
+    // {{type::name}} 또는 {{type::name::}} 패턴 매칭
+    const assetRegex = /\{\{(asset|image|img|video|video-img|audio|raw|path|bg|bgm|emotion)::([^}:]+)(?:::)?\}\}/gi;
+    
+    return html.replace(assetRegex, (full, type, name) => {
+      const lowerType = type.toLowerCase();
+      const lowerName = name.toLowerCase().trim();
+      
+      // 에셋 URL 찾기 (정확 매칭 또는 fuzzy 매칭)
+      let assetUrl = findAssetUrl(lowerName);
+      
+      if (!assetUrl) {
+        console.warn('[parseAdditionalAssets] 에셋 없음:', name);
+        return ''; // RisuAI도 매칭 안되면 빈 문자열 반환
+      }
+      
+      switch (lowerType) {
+        case 'raw':
+        case 'path':
+          return assetUrl;
+        case 'img':
+          return `<img src="${assetUrl}" alt="${name}" />`;
+        case 'image':
+          return `<div class="risu-inlay-image"><img src="${assetUrl}" alt="${name}" /></div>\n`;
+        case 'asset':
+          // 확장자에 따라 이미지/비디오 자동 결정
+          const ext = name.split('.').pop()?.toLowerCase() || '';
+          const videoExts = ['mp4', 'webm', 'avi', 'm4p', 'm4v'];
+          if (videoExts.includes(ext)) {
+            return `<video controls autoplay loop><source src="${assetUrl}" type="video/${ext}"></video>\n`;
+          }
+          return `<div class="risu-inlay-image"><img src="${assetUrl}" alt="${name}" /></div>\n`;
+        case 'video':
+          return `<video controls autoplay loop><source src="${assetUrl}" type="video/mp4"></video>\n`;
+        case 'video-img':
+          return `<video autoplay muted loop><source src="${assetUrl}" type="video/mp4"></video>\n`;
+        case 'audio':
+        case 'bgm':
+          return `<audio controls autoplay loop><source src="${assetUrl}" type="audio/mpeg"></audio>\n`;
+        case 'bg':
+          return `<div class="risu-bg" style="background-image: url('${assetUrl}')"></div>\n`;
+        case 'emotion':
+          return `<img src="${assetUrl}" alt="${name}" class="risu-emotion" />`;
+        default:
+          return assetUrl;
+      }
+    });
+  }
+  
+  // 에셋 URL 찾기 (정확 매칭 + fuzzy 매칭)
+  function findAssetUrl(name: string): string | null {
+    if (!assets || Object.keys(assets).length === 0) return null;
+    
+    const trimmedName = trimAssetName(name);
+    
+    // 1. 정확한 매칭
+    if (assets[name]) return assets[name];
+    
+    // 2. 대소문자 무시 매칭
+    for (const [key, url] of Object.entries(assets)) {
+      if (key.toLowerCase() === name.toLowerCase()) return url;
+    }
+    
+    // 3. Fuzzy 매칭 (RisuAI 방식)
+    let closestUrl = '';
+    let closestDist = 999999;
+    const maxDifference = 3;
+    
+    for (const [key, url] of Object.entries(assets)) {
+      const trimmedKey = trimAssetName(key);
+      const dist = getDistance(trimmedName, trimmedKey);
+      
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestUrl = url;
+      }
+    }
+    
+    if (closestDist <= maxDifference && closestUrl) {
+      return closestUrl;
+    }
+    
+    return null;
+  }
+
+  // src 속성 치환 (이미 HTML에 있는 경우)
   function resolveAssetUrls(html: string): string {
     if (!html || Object.keys(assets).length === 0) return html;
     
@@ -229,29 +334,9 @@
         return match;
       }
       
-      // 정확한 매칭
-      if (assets[src]) {
-        return `src="${assets[src]}"`;
-      }
-      
-      // RisuAI 방식: 정규화된 이름으로 가장 가까운 매칭
-      const trimmedSrc = trimAssetName(src);
-      let closestUrl = '';
-      let closestDist = 999999;
-      const maxDifference = 3;
-      
-      for (const [name, dataUrl] of Object.entries(assets)) {
-        const trimmedName = trimAssetName(name);
-        const dist = getDistance(trimmedSrc, trimmedName);
-        
-        if (dist < closestDist) {
-          closestDist = dist;
-          closestUrl = dataUrl;
-        }
-      }
-      
-      if (closestDist <= maxDifference && closestUrl) {
-        return `src="${closestUrl}"`;
+      const assetUrl = findAssetUrl(src);
+      if (assetUrl) {
+        return `src="${assetUrl}"`;
       }
       
       return match;
@@ -265,31 +350,43 @@
   // RisuAI 순서: Lua listenEdit → CBS 파싱 → Regex 적용
   async function render() {
     let content = firstMessage;
+    console.log('[Simulator] 렌더링 시작, 원본 길이:', content.length);
     
     // 1. Lua editDisplay 트리거 실행 (listenEdit 콜백) - RisuAI는 Lua가 먼저!
     if (luaEngine) {
       try {
         content = await luaEngine.runEditDisplay(content, 'simulator');
-        console.log('[Simulator] Lua editDisplay 실행 완료');
+        console.log('[Simulator] Lua editDisplay 실행 완료, 길이:', content.length);
       } catch (e) {
         console.warn('[Simulator] Lua editDisplay 오류:', e);
       }
     }
     
-    // 2. CBS 변수 치환
+    // 2. 첫 번째 에셋 치환 (CBS 전에) - RisuAI parseAdditionalAssets
+    content = parseAdditionalAssets(content);
+    
+    // 3. CBS 처리 (정규식 적용 전)
+    const beforeCBS1 = content;
     content = replaceCBSVariables(content);
+    console.log('[Simulator] CBS 처리 완료, 길이:', content.length, '변경:', beforeCBS1.length !== content.length);
     
-    // 3. 정규식 적용 (Lua 이후에 실행)
+    // 4. 정규식 적용 (Lua 이후에 실행)
+    const beforeRegex = content;
     content = applyRegexScripts(content);
+    console.log('[Simulator] 정규식 처리 완료, 길이:', content.length, '변경:', beforeRegex.length !== content.length);
     
-    // 4. 에셋 URL 치환
+    // 5. 두 번째 에셋 치환 (정규식 OUT에서 새 에셋 참조 생성 가능)
+    content = parseAdditionalAssets(content);
+    
+    // 6. src 속성 치환 (HTML 내 직접 참조)
     content = resolveAssetUrls(content);
     
     transformedContent = content;
     
-    // virtualScript도 CBS 변수 치환 적용
+    // virtualScript도 처리
     if (virtualScript) {
-      transformedVirtualScript = replaceCBSVariables(virtualScript);
+      transformedVirtualScript = parseAdditionalAssets(virtualScript);
+      transformedVirtualScript = replaceCBSVariables(transformedVirtualScript);
       transformedVirtualScript = resolveAssetUrls(transformedVirtualScript);
       console.log('[Simulator] virtualScript 렌더링 완료, 길이:', transformedVirtualScript.length);
     }

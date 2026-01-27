@@ -97,20 +97,46 @@ export async function exportCharx(
   try {
     const files: Record<string, Uint8Array> = {};
     
-    // card.json 추가
-    const cardJson = JSON.stringify(card, null, 2);
+    // 순환 참조 제거를 위한 safe stringify
+    const seen = new WeakSet();
+    const cardJson = JSON.stringify(card, (key, value) => {
+      // Uint8Array는 배열로 변환하지 않고 제외 (에셋 데이터)
+      if (value instanceof Uint8Array) {
+        return undefined;
+      }
+      // Map은 일반 객체로 변환
+      if (value instanceof Map) {
+        return Object.fromEntries(value);
+      }
+      // 순환 참조 감지
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) {
+          return undefined; // 순환 참조 제거
+        }
+        seen.add(value);
+      }
+      return value;
+    }, 2);
     files['card.json'] = strToU8(cardJson);
     
     // 에셋 추가
     for (const [path, data] of assets) {
-      files[path] = data;
+      // data가 객체인 경우 (AssetInfo) 실제 데이터 추출
+      if (data instanceof Uint8Array) {
+        files[path] = data;
+      } else if (typeof data === 'object' && data !== null && 'data' in data) {
+        const assetData = (data as any).data;
+        if (assetData instanceof Uint8Array) {
+          files[path] = assetData;
+        }
+      }
     }
     
     // 동기 zip 사용
-    const data = zipSync(files);
+    const zipData = zipSync(files);
     
-    logger.info('charx', '내보내기 완료', { size: data.length });
-    return data;
+    logger.info('charx', '내보내기 완료', { size: zipData.length });
+    return zipData;
   } catch (err) {
     logger.error('charx', 'ZIP 생성 실패', { error: err });
     throw new CharxParseError('Failed to create charx zip', err);
