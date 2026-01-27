@@ -1,271 +1,236 @@
 /**
- * RisuStudio CBS (Character Building Script) Types
- * 
- * CBS is RisuAI's templating language for dynamic text processing.
- * Syntax: {{command::arg1::arg2::...}}
+ * RisuAI CBS 파서용 타입 정의
+ * RisuAI의 storage/database.svelte.ts에서 필요한 타입만 추출
  */
 
-/**
- * CBS 실행 컨텍스트
- * 시뮬레이터에서 변수와 채팅 상태를 관리
- */
-export interface CBSContext {
-  /** 채팅 세션 변수 (채팅 내에서 유지) */
-  chatVars: Record<string, string>;
-  
-  /** 글로벌 변수 (모든 채팅에서 공유) */
-  globalVars: Record<string, string>;
-  
-  /** 임시 변수 (실행 중에만 유지) */
-  tempVars: Record<string, string>;
-  
-  /** 캐릭터 정보 */
-  char: {
-    name: string;
-    nickname?: string;
-    personality?: string;
-    description?: string;
-    scenario?: string;
-    mes_example?: string;
-    system_prompt?: string;
-    emotionList?: string[];
-    assets?: Array<{ name: string; type: string }>;
-  };
-  
-  /** 사용자 이름 */
-  user: string;
-  
-  /** 페르소나 */
-  persona?: string;
-  
-  /** 탈옥 프롬프트 */
-  jailbreak?: string;
-  
-  /** 탈옥 활성화 여부 */
-  jbToggled?: boolean;
-  
-  /** 글로벌 노트 */
-  globalNote?: string;
-  
-  /** 채팅 기록 */
-  chatHistory: CBSMessage[];
-  
-  /** 히스토리 (새 형식) */
-  history: Array<{
-    role: 'user' | 'char' | 'system';
-    content: string;
-    timestamp?: number;
-  }>;
-  
-  /** 현재 채팅 ID (메시지 인덱스) */
-  chatID: number;
-  
-  /** 변수 설정 가능 여부 */
-  runVar?: boolean;
-  
-  /** 변수 제거 모드 */
-  rmVar?: boolean;
-  
-  /** 토큰 정확도 모드 (시간 관련 함수에서 상수 반환) */
-  tokenizeAccurate?: boolean;
-  
-  /** 화면 표시용 처리 중 여부 */
-  displaying?: boolean;
-  
-  /** 현재 모델명 */
-  model?: string;
-  
-  /** 현재 역할 */
-  role?: string;
-  
-  /** 최대 컨텍스트 크기 */
-  maxContext?: number;
-  
-  /** 트리거 ID */
-  triggerId?: string;
-  
-  /** 활성화된 모듈 목록 */
-  enabledModules?: string[];
+export interface loreBook {
+  key: string;
+  secondkey: string;
+  insertorder: number;
+  comment: string;
+  content: string;
+  mode: 'normal' | 'raw' | 'lorebook';
+  alwaysActive: boolean;
+  selective: boolean;
+  extentions?: Record<string, unknown>;
+  order?: number;
+  activeProbability?: number;
+  loreCache?: unknown;
+  useRegex?: boolean;
+  scanDepth?: number | null;
+  caseSensitive?: boolean;
+  matchWholeWords?: boolean;
+  priority?: number;
+  displayName?: string;
+  groupOverride?: string | null;
+  groupWeight?: number;
 }
 
-/**
- * CBS 메시지 형식
- */
-export interface CBSMessage {
+export interface character {
+  type: 'character' | 'group' | 'simple';
+  name: string;
+  nickname?: string;
+  firstMessage: string;
+  alternateGreetings?: string[];
+  desc: string;
+  notes: string;
+  chats: Chat[];
+  chatPage: number;
+  image?: string;
+  emotionImages: [string, string][];
+  bias: [string, number][];
+  globalLore: loreBook[];
+  chaId: string;
+  sdData: unknown;
+  customscript: unknown[];
+  triggerscript: unknown[];
+  additionalAssets: [string, string, string?][];
+  virtualscript?: string;
+  backgroundHTML?: string;
+  lowLevelAccess?: boolean;
+  extentions?: Record<string, unknown>;
+}
+
+export interface Chat {
+  message: Message[];
+  note: string;
+  name: string;
+  localLore: loreBook[];
+  sdpieces?: unknown;
+  isRecording?: boolean;
+  fmIndex?: number;
+}
+
+export interface Message {
   role: 'user' | 'char' | 'system';
   data: string;
+  saying?: string;
+  chatId?: string;
   time?: number;
 }
 
-/**
- * CBS 실행 결과
- */
-export interface CBSResult {
-  /** 처리된 출력 텍스트 */
-  output: string;
-  
-  /** 실행 추적 정보 */
-  trace: CBSTraceStep[];
-  
-  /** 변경된 변수들 */
-  modifiedVars: {
-    chatVars: Record<string, string>;
-    globalVars: Record<string, string>;
-    tempVars: Record<string, string>;
-  };
-  
-  /** 에러 목록 */
-  errors: CBSError[];
-}
-
-/**
- * CBS 실행 추적 단계
- */
-export interface CBSTraceStep {
-  /** 원본 표현식 */
-  original: string;
-  
-  /** 평가된 결과 */
-  result: string;
-  
-  /** 명령어 이름 */
-  command: string;
-  
-  /** 인자들 */
-  args: string[];
-  
-  /** 소스 위치 */
-  position: {
-    start: number;
-    end: number;
-  };
-  
-  /** 실행 시간 (ms) */
-  duration?: number;
-  
-  /** 중첩된 평가 */
-  nested?: CBSTraceStep[];
-}
-
-/**
- * CBS 에러
- */
-export interface CBSError {
-  message: string;
-  command?: string;
-  position?: {
-    start: number;
-    end: number;
-  };
-  severity: 'warning' | 'error';
-}
-
-/**
- * CBS 파싱된 노드
- */
-export interface CBSNode {
-  type: 'text' | 'command' | 'block';
-  value: string;
-  command?: string;
-  args?: string[];
-  children?: CBSNode[];
-  position: {
-    start: number;
-    end: number;
-  };
-}
-
-/**
- * CBS 명령어 정의
- */
-export interface CBSCommand {
-  /** 명령어 이름 */
+export interface groupChat {
+  type: 'group';
   name: string;
-  
-  /** 명령어 별칭 */
-  aliases: string[];
-  
-  /** 설명 */
+  chats: Chat[];
+  chatPage: number;
+  characters: string[];
+}
+
+export interface Database {
+  characters: character[];
+  formatversion?: number;
+  aiModel?: string;
+  subModel?: string;
+  persona?: {
+    name: string;
+    icon: string;
+    personaPrompt: string;
+  };
+  username?: string;
+  userIcon?: string;
+  personaPrompt?: string;
+  customBackground?: string;
+  globalNote?: string;
+  autoTranslate?: boolean;
+  fullScreen?: boolean;
+  playMessage?: boolean;
+  iconsize?: number;
+  theme?: string;
+  subtheme?: string;
+  timeZone?: string;
+  jailbreakToggle?: boolean;
+  jailbreak?: string;
+  globalLore?: loreBook[];
+  maxContext?: number;
+  temperature?: number;
+  maxResponse?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  sdProvider?: string;
+  runpodKey?: string;
+  sdSteps?: number;
+  sdCFG?: number;
+  textgenWebUIStreamURL?: string;
+  textgenWebUIBlockingURL?: string;
+  forceReplaceUrl?: string;
+  forceReplaceUrl2?: string;
+  promptPreprocess?: boolean;
+  bias?: [string, number][];
+  swipe?: boolean;
+  hideMobileRecordButton?: boolean;
+  sendWithEnter?: boolean;
+  assetWidth?: number;
+  animationSpeed?: number;
+  botPresets?: unknown[];
+  botPresetsId?: number;
+  sdConfig?: unknown;
+  hordeConfig?: unknown;
+  NAISettings?: unknown;
+  globalscript?: unknown[];
+  roundIcons?: boolean;
+  characterOrder?: string[];
+  backgroundFileType?: string;
+  textTheme?: string;
+  characterHubOptRecent?: boolean;
+  useStreaming?: boolean;
+  ttsAutoRecordingReady?: boolean;
+  ttsModel?: string;
+  ttsVoice?: string;
+  presetRegex?: unknown[];
+  hideAllImages?: boolean;
+  autoScrollButton?: boolean;
+  additionalStopList?: string[];
+  assetMaxDifference?: number;
+}
+
+export interface RisuModule {
+  name: string;
   description: string;
-  
-  /** 콜백 함수 */
-  callback: CBSCallback | 'doc_only';
-  
-  /** 내부 전용 여부 */
-  internalOnly?: boolean;
-  
-  /** 사용 중단 정보 */
-  deprecated?: {
-    message: string;
-    since?: string;
-    replacement?: string;
-  };
+  lorebook?: loreBook[];
+  regex?: unknown[];
+  assets?: [string, string][];
+  trigger?: unknown[];
+  cjs?: string;
 }
 
-/**
- * CBS 콜백 함수 타입
- */
-export type CBSCallback = (
-  args: string[],
-  context: CBSContext,
-  vars: Record<string, string>
-) => CBSCallbackResult;
-
-/**
- * CBS 콜백 결과 타입
- */
-export type CBSCallbackResult = 
-  | string 
-  | null 
-  | { text: string; var: Record<string, string> };
-
-/**
- * 변수 정보 (에디터용)
- */
-export interface VariableInfo {
+export interface LLMModel {
+  id: string;
   name: string;
-  type: 'chatVar' | 'globalVar' | 'tempVar';
-  operation: 'get' | 'set' | 'add';
-  position: {
-    start: number;
-    end: number;
-  };
+  shortName: string;
+  internalID: string;
+  format: number;
+  provider: number;
+  tokenizer: number;
 }
 
-/**
- * 기본 CBS 컨텍스트 생성
- */
-export function createDefaultContext(): CBSContext {
-  return {
-    chatVars: {},
-    globalVars: {},
-    tempVars: {},
-    char: { 
-      name: 'Character',
-      personality: '',
-      description: '',
-      scenario: '',
-      mes_example: '',
-      system_prompt: '',
-      emotionList: [],
-      assets: [],
-    },
-    user: 'User',
-    persona: '',
-    jailbreak: '',
-    jbToggled: false,
-    globalNote: '',
-    chatHistory: [],
-    history: [],
-    chatID: -1,
-    runVar: true,
-    rmVar: false,
-    tokenizeAccurate: false,
-    displaying: false,
-    model: 'unknown',
-    role: 'user',
-    maxContext: 4096,
-    triggerId: undefined,
-    enabledModules: [],
-  };
+export interface CbsConditions {
+  [key: string]: boolean | string | number;
+}
+
+export interface matcherArg {
+  chatID: number;
+  db: Database;
+  chara: character | string | null;
+  rmVar: boolean;
+  var?: { [key: string]: string } | null;
+  tokenizeAccurate?: boolean;
+  consistantChar?: boolean;
+  displaying?: boolean;
+  role?: string;
+  runVar?: boolean;
+  funcName?: string;
+  text?: string;
+  recursiveCount?: number;
+  lowLevelAccess?: boolean;
+  cbsConditions: CbsConditions;
+  callStack?: number;
+  triggerId?: string;
+  getNested?: () => string[];
+  setNestedRoot?: (val: string) => void;
+}
+
+export type RegisterCallback = (
+  str: string,
+  matcherArg: matcherArg,
+  args: string[],
+  vars: { [key: string]: string } | null
+) => { text: string; var: { [key: string]: string } } | string | null;
+
+export interface CBSRegisterArg {
+  registerFunction: (arg: {
+    name: string;
+    callback: RegisterCallback | 'doc_only';
+    alias: string[];
+    description: string;
+    deprecated?: {
+      message: string;
+      since?: string;
+      replacement?: string;
+    };
+    internalOnly?: boolean;
+  }) => void | Promise<void>;
+  getDatabase: () => Database;
+  getUserName: () => string;
+  getPersonaPrompt: () => string;
+  risuChatParser: (text: string, arg: matcherArg) => string;
+  makeArray: (arr: unknown[]) => string;
+  safeStructuredClone: <T>(obj: T) => T;
+  parseArray: (str: string) => unknown[];
+  parseDict: (str: string) => { [key: string]: unknown };
+  getChatVar: (key: string) => string;
+  setChatVar: (key: string, value: string) => void;
+  getGlobalChatVar: (key: string) => string;
+  calcString: (str: string) => number;
+  dateTimeFormat: (format: string, timestamp?: number) => string;
+  getModules: () => RisuModule[];
+  getModuleLorebooks: () => loreBook[];
+  pickHashRand: (seed: number, hash: string) => number;
+  getSelectedCharID: () => number;
+  getModelInfo: (model: string) => LLMModel;
+  callInternalFunction: (args: string[]) => string;
+  isTauri: boolean;
+  isNodeServer: boolean;
+  isMobile: boolean;
+  appVer: string;
 }

@@ -294,12 +294,27 @@
         // 확장자 기반으로 타입 결정 (x-risu-asset 같은 원본 타입 무시)
         const type = getAssetType(ext);
         
+        // 실제 파일 포맷 감지 (메타데이터와 다를 수 있음)
+        let displayExt = ext;
+        if (asset.data) {
+          const bytes = asset.data instanceof Uint8Array ? asset.data : 
+                        (ArrayBuffer.isView(asset.data) ? new Uint8Array(asset.data.buffer) :
+                        (typeof asset.data.length === 'number' ? new Uint8Array(asset.data) : null));
+          if (bytes) {
+            const detectedFormat = detectImageFormat(bytes);
+            if (detectedFormat && detectedFormat !== ext) {
+              console.log('[AssetTab] 확장자 불일치 감지 (early):', { 메타: ext, 실제: detectedFormat, id });
+              displayExt = detectedFormat;
+            }
+          }
+        }
+        
         // 이미 dataUrl이 있으면 사용 (charx 변환에서 미리 계산됨)
         if (asset.dataUrl && asset.dataUrl.length > 0) {
           return {
             id,
             name: asset.name || id,
-            ext,
+            ext: displayExt,  // 실제 감지된 확장자 사용
             type,
             data: asset.data,
             dataUrl: asset.dataUrl,
@@ -313,7 +328,7 @@
           return {
             id,
             name: asset.name || id,
-            ext,
+            ext: displayExt,  // 실제 감지된 확장자 사용
             type,
             data: asset.data,
             dataUrl: '', // 나중에 on-demand로 생성
@@ -336,10 +351,18 @@
           // 배열 형태를 Uint8Array로 변환
           const bytes = asset.data instanceof Uint8Array ? asset.data : new Uint8Array(asset.data);
           size = bytes.length;
+          
+          // 실제 파일 포맷 감지 (메타데이터와 다를 수 있음) - 이미 위에서 처리됨
+          const detectedFormat = detectImageFormat(bytes);
+          if (detectedFormat && detectedFormat !== displayExt) {
+            console.log('[AssetTab] 확장자 불일치 감지 (late):', { 메타: ext, 실제: detectedFormat, id });
+            displayExt = detectedFormat;
+          }
+          
           try {
             // AssetGod 방식: magic bytes 우선 감지
             dataUrl = createDataUrlFromBytes(bytes, ext);
-            console.log('[AssetTab] Blob URL 생성:', { id, ext, size, urlLen: dataUrl.length });
+            console.log('[AssetTab] Blob URL 생성:', { id, ext: displayExt, size, urlLen: dataUrl.length });
           } catch (e) {
             console.error('Asset conversion error:', e);
           }
@@ -352,7 +375,7 @@
         return {
           id,
           name: asset.name || id,
-          ext,
+          ext: displayExt,  // 실제 감지된 확장자 사용
           type,
           data: asset.data,
           dataUrl,

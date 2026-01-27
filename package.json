@@ -43,6 +43,7 @@
     "@lezer/highlight": "^1.2.3",
     "codemirror": "^6.0.2",
     "fflate": "^0.8.1",
-    "msgpackr": "^1.10.0"
+    "msgpackr": "^1.10.0",
+    "wasmoon": "^1.16.0"
   }
 }

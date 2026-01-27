@@ -13,6 +13,25 @@
 
   const dispatch = createEventDispatcher();
 
+  // MIME 타입 헬퍼
+  function getMimeType(ext: string): string {
+    const map: Record<string, string> = {
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'webp': 'image/webp',
+      'avif': 'image/avif',
+      'svg': 'image/svg+xml',
+      'mp3': 'audio/mpeg',
+      'wav': 'audio/wav',
+      'ogg': 'audio/ogg',
+      'mp4': 'video/mp4',
+      'webm': 'video/webm',
+    };
+    return map[ext.toLowerCase()] || 'application/octet-stream';
+  }
+
   // Props - editedData가 그대로 전달됨
   export let characterData: any = null;
   export let moduleData: any = null;
@@ -97,6 +116,24 @@
     };
   }
 
+  // virtualscript 추출 (트리거 UI)
+  function getVirtualScript(data: any): string {
+    if (!data) return '';
+    
+    const cardData = data.cardData || data.card?.data || data;
+    const ext = cardData?.extensions?.risuai || {};
+    const additionalData = ext.additionalData?.data || {};
+    
+    // virtualscript 위치 확인
+    const virtualscript = additionalData.virtualscript || ext.virtualscript || cardData.virtualscript || '';
+    
+    if (virtualscript) {
+      console.log('[getVirtualScript] virtualscript 발견, 길이:', virtualscript.length);
+    }
+    
+    return virtualscript;
+  }
+
   // 에셋 추출 (이미지, 오디오 등)
   // fileData.assets는 이미 Map<string, { id, name, ext, type, data, dataUrl, size }>
   function getAssets(data: any): Map<string, { dataUrl: string; name: string }> {
@@ -107,9 +144,24 @@
     if (data.assets instanceof Map) {
       console.log('[getAssets] assets Map 발견, 크기:', data.assets.size);
       for (const [key, asset] of data.assets) {
-        if (asset.dataUrl) {
+        let dataUrl = asset.dataUrl;
+        
+        // dataUrl이 없으면 data에서 생성
+        if (!dataUrl && asset.data) {
+          try {
+            const bytes = asset.data instanceof Uint8Array ? asset.data : new Uint8Array(asset.data);
+            const mime = getMimeType(asset.ext || 'png');
+            const blob = new Blob([bytes], { type: mime });
+            dataUrl = URL.createObjectURL(blob);
+            console.log('[getAssets] Blob URL 생성:', key, dataUrl.slice(0, 30));
+          } catch (e) {
+            console.error('[getAssets] Blob URL 생성 실패:', key, e);
+          }
+        }
+        
+        if (dataUrl) {
           result.set(key, { 
-            dataUrl: asset.dataUrl, 
+            dataUrl, 
             name: asset.name || key 
           });
         }
@@ -126,6 +178,8 @@
         }
       }
     }
+    
+    console.log('[getAssets] 최종 결과:', result.size, '개, 키:', [...result.keys()]);
     
     // 캐릭터 아이콘 추출 (risuai extension에서)
     const cardData = data.cardData || data.card?.data || data;
@@ -158,6 +212,7 @@
   $: triggerScripts = getTriggerList(characterData);
   $: charInfo = getCharacterInfo(characterData);
   $: bgEmbed = getBackgroundEmbedding(characterData);
+  $: virtualScript = getVirtualScript(characterData);
   $: assets = getAssets(characterData);
   $: charIcon = assets.get('__char_icon__')?.dataUrl || '';
 
@@ -179,26 +234,13 @@
   function computeProcessedMessage(rawMessage: string, vars: Record<string, string>): string {
     if (!rawMessage) return '';
     try {
-      const context = {
-        char: { name: charInfo.name },
-        user: 'User',
-        chatVars: { ...vars },
-        globalVars: {},
-        tempVars: {},
-        chatHistory: chatHistory.map((msg, i) => ({
-          role: msg.role as 'user' | 'char',
-          data: msg.content,
-        })),
-        history: [],
-        chatID: chatHistory.length,
-      };
-      const result = evaluateCBS(rawMessage, context);
+      const result = evaluateCBS(rawMessage);
       console.log('[SimulatorPanel] CBS 처리 결과 (K=' + vars.K + '):', {
         inputLen: rawMessage.length,
-        outputLen: result.output.length,
-        sample: result.output.slice(0, 300)
+        outputLen: result.length,
+        sample: result.slice(0, 300)
       });
-      return result.output;
+      return result;
     } catch (e) {
       console.warn('[SimulatorPanel] CBS 처리 실패:', e);
       return rawMessage;
@@ -488,6 +530,143 @@
   // triggerMap 계산 (triggerScripts가 변경될 때)
   $: triggerMap = parseTriggerLua(triggerScripts);
 
+  // RisuAI 방식: 에셋 이름 정규화 (확장자 + 특수문자 제거)
+  function trimAssetName(str: string): string {
+    const ext = ['webp', 'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'avi', 'm4p', 'm4v', 'mp3', 'wav', 'ogg'];
+    let s = str.toLowerCase();
+    for (const e of ext) {
+      if (s.endsWith('.' + e)) {
+        s = s.substring(0, s.length - e.length - 1);
+        break;
+      }
+    }
+    return s.trim().replace(/[_ \-.]/g, '');
+  }
+
+  // Levenshtein distance (RisuAI 방식)
+  function getDistance(a: string, b: string): number {
+    const h = a.length + 1;
+    const w = b.length + 1;
+    const d = new Int16Array(h * w);
+    for (let i = 0; i < h; i++) d[i * w] = i;
+    for (let i = 0; i < w; i++) d[i] = i;
+    for (let i = 1; i < h; i++) {
+      for (let j = 1; j < w; j++) {
+        d[i * w + j] = Math.min(
+          d[(i - 1) * w + j - 1] + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1),
+          d[(i - 1) * w + j] + 1,
+          d[i * w + j - 1] + 1
+        );
+      }
+    }
+    return d[h * w - 1];
+  }
+
+  // 에셋에서 가장 가까운 매칭 찾기 (RisuAI 방식)
+  function findClosestAsset(name: string, assetMap: Map<string, { dataUrl: string; name?: string }>): { key: string; dataUrl: string } | null {
+    const trimmedName = trimAssetName(name);
+    let closestKey = '';
+    let closestDist = 999999;
+    let closestDataUrl = '';
+    
+    const maxDifference = 3; // RisuAI 기본값
+    
+    for (const [key, assetObj] of assetMap) {
+      if (key === '__char_icon__') continue;
+      
+      const trimmedKey = trimAssetName(key);
+      const dist = getDistance(trimmedName, trimmedKey);
+      
+      if (dist < closestDist) {
+        closestKey = key;
+        closestDist = dist;
+        closestDataUrl = assetObj.dataUrl;
+      }
+    }
+    
+    if (closestDist > maxDifference) {
+      return null;
+    }
+    
+    return { key: closestKey, dataUrl: closestDataUrl };
+  }
+
+  // 새 탭에서 시뮬레이터 열기
+  function openInNewTab() {
+    // firstMessage + regex out에서 사용되는 이미지만 추출
+    const usedAssets: Record<string, string> = {};
+    
+    // 1. firstMessage에서 img src 추출
+    const imgPattern = /src=["']([^"']+)["']/gi;
+    let match;
+    const imagesToFind = new Set<string>();
+    
+    // firstMessage에서 찾기
+    while ((match = imgPattern.exec(charInfo.firstMessage)) !== null) {
+      const src = match[1];
+      if (!src.startsWith('data:') && !src.startsWith('http') && !src.startsWith('blob:')) {
+        imagesToFind.add(src);
+      }
+    }
+    
+    // 2. regex out에서도 찾기 (치환 후 생성될 이미지)
+    for (const script of regexScripts) {
+      if (script.out) {
+        const outPattern = /src=["']([^"'$]+)["']/gi;
+        while ((match = outPattern.exec(script.out)) !== null) {
+          const src = match[1];
+          if (!src.startsWith('data:') && !src.startsWith('http') && !src.startsWith('{{')) {
+            imagesToFind.add(src);
+          }
+        }
+      }
+    }
+    
+    console.log('[SimulatorPanel] 사용되는 이미지:', [...imagesToFind]);
+    
+    // 3. RisuAI 방식으로 에셋 매칭
+    // 에셋 ID(예: 규칙.png)와 HTML 참조명(예: 규칙.webp)이 달라도 매칭
+    for (const imgName of imagesToFind) {
+      const found = findClosestAsset(imgName, assets);
+      if (found) {
+        // HTML에서 참조하는 이름(imgName)을 키로 저장
+        usedAssets[imgName] = found.dataUrl;
+        console.log('[SimulatorPanel] 에셋 매칭:', imgName, '→', found.key);
+      } else {
+        console.warn('[SimulatorPanel] 에셋 미발견:', imgName);
+      }
+    }
+    
+    console.log('[SimulatorPanel] 추출된 에셋:', Object.keys(usedAssets).length, '개');
+    
+    // 데이터 준비
+    const simulatorData = {
+      characterName: charInfo.name,
+      firstMessage: charInfo.firstMessage,
+      backgroundHTML: bgEmbed.css + bgEmbed.html,
+      virtualScript,
+      regexScripts,
+      triggerScripts,
+      variables: chatVars,
+      assets: usedAssets,
+    };
+    
+    console.log('[SimulatorPanel] virtualScript 길이:', virtualScript.length);
+    
+    // sessionStorage에 저장
+    try {
+      const dataStr = JSON.stringify(simulatorData);
+      console.log('[SimulatorPanel] 시뮬레이터 데이터 크기:', (dataStr.length / 1024).toFixed(1), 'KB');
+      sessionStorage.setItem('risustudio_simulator_data', dataStr);
+      
+      // 새 탭 열기
+      window.open('/simulator', '_blank');
+    } catch (e) {
+      console.error('[SimulatorPanel] 데이터 저장 오류:', e);
+      alert('시뮬레이터 데이터 저장에 실패했습니다. 이미지가 너무 많습니다.');
+    }
+  }
+
   // 트리거에서 함수 이름 추출
   function extractTriggerFunctions(triggers: any[]): string[] {
     const functions: string[] = [];
@@ -559,6 +738,9 @@
     <div class="header-actions">
       <button class="run-btn" on:click={runSimulation} disabled={isRunning}>
         {isRunning ? '⏳ 실행 중...' : '▶️ 시뮬레이션 실행'}
+      </button>
+      <button class="newtab-btn" on:click={openInNewTab} title="새 탭에서 전체화면 시뮬레이터 열기">
+        🔳 새 탭에서 열기
       </button>
       <button class="clear-btn" on:click={clearHistory}>
         🗑️ 초기화
@@ -760,6 +942,19 @@
 
   .clear-btn:hover {
     background: var(--bg-hover, #2a2a2a);
+  }
+
+  .newtab-btn {
+    background: #44475a;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .newtab-btn:hover {
+    background: #6272a4;
   }
 
   .data-summary {

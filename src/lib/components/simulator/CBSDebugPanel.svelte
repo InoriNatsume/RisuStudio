@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { evaluateCBS } from '$lib/core/cbs';
+  import { evaluateCBS, setSimulatorContext } from '$lib/core/cbs';
 
   export let results: Array<{
     input: string;
@@ -21,24 +21,15 @@
     testError = '';
     testTrace = [];
     try {
-      const result = evaluateCBS(testInput, {
-        char: { name: charName },
-        user: 'User',
-        chatVars: { ...chatVars },
-        globalVars: {},
-        tempVars: {},
-        chatHistory: [],
-        history: [],
-        chatID: 0,
+      // 시뮬레이터 컨텍스트 설정
+      setSimulatorContext({
+        userName: 'User',
+        chatVars: new Map(Object.entries(chatVars)),
+        globalChatVars: new Map()
       });
-      testOutput = result.output;
-      // 트레이스 정보 수집
-      if (result.trace) {
-        testTrace = result.trace.map(t => ({
-          command: t.command,
-          result: String(t.result ?? ''),
-        }));
-      }
+      
+      const result = evaluateCBS(testInput);
+      testOutput = result;
     } catch (e) {
       testError = e instanceof Error ? e.message : String(e);
       testOutput = '';

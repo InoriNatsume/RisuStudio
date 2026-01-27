@@ -92,6 +92,9 @@
       { key: 'lorePlus', label: '로어 플러스', type: 'checkbox', value: risuExt.lorePlus || false, section: 'advanced', path: 'extensions.risuai.lorePlus' },
       { key: 'inlayViewScreen', label: '인레이 뷰 스크린', type: 'checkbox', value: risuExt.inlayViewScreen || false, section: 'advanced', path: 'extensions.risuai.inlayViewScreen' },
       { key: 'utilityBot', label: '유틸리티 봇', type: 'checkbox', value: risuExt.utilityBot || false, section: 'advanced', path: 'extensions.risuai.utilityBot' },
+      
+      // 백그라운드 임베딩 (RisuAI)
+      { key: 'backgroundHTML', label: '백그라운드 임베딩', type: 'textarea', value: risuExt.backgroundHTML || '', section: 'advanced', path: 'extensions.risuai.backgroundHTML' },
     ];
   }
 

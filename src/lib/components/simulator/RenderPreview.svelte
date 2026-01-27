@@ -18,6 +18,75 @@
   let scale = 100;
   let iframeRef: HTMLIFrameElement;
 
+  // RisuAI 방식: 에셋 이름 정규화 (확장자 + 특수문자 제거)
+  function trimAssetName(str: string): string {
+    const ext = ['webp', 'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'avi', 'm4p', 'm4v', 'mp3', 'wav', 'ogg'];
+    let s = str.toLowerCase();
+    for (const e of ext) {
+      if (s.endsWith('.' + e)) {
+        s = s.substring(0, s.length - e.length - 1);
+        break;
+      }
+    }
+    return s.trim().replace(/[_ \-.]/g, '');
+  }
+
+  // Levenshtein distance (RisuAI 방식)
+  function getDistance(a: string, b: string): number {
+    const h = a.length + 1;
+    const w = b.length + 1;
+    const d = new Int16Array(h * w);
+    for (let i = 0; i < h; i++) d[i * w] = i;
+    for (let i = 0; i < w; i++) d[i] = i;
+    for (let i = 1; i < h; i++) {
+      for (let j = 1; j < w; j++) {
+        d[i * w + j] = Math.min(
+          d[(i - 1) * w + j - 1] + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1),
+          d[(i - 1) * w + j] + 1,
+          d[i * w + j - 1] + 1
+        );
+      }
+    }
+    return d[h * w - 1];
+  }
+
+  // RisuAI 방식: 에셋 찾기 (Levenshtein distance + 정규화)
+  function findAssetByBasename(srcPath: string): { dataUrl: string; name: string } | null {
+    // 정확한 이름으로 먼저 찾기
+    const exact = assets.get(srcPath);
+    if (exact) return exact;
+    
+    // RisuAI 방식: 정규화된 이름으로 가장 가까운 매칭 찾기
+    const trimmedSrc = trimAssetName(srcPath);
+    let closestAsset: { dataUrl: string; name: string } | null = null;
+    let closestDist = 999999;
+    
+    const maxDifference = 3; // RisuAI 기본값
+    
+    for (const [key, asset] of assets) {
+      const trimmedKey = trimAssetName(key);
+      const dist = getDistance(trimmedSrc, trimmedKey);
+      
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestAsset = asset;
+        
+        // 완전 일치면 바로 반환
+        if (dist === 0) {
+          console.log('[RenderPreview] 에셋 정확 매칭:', srcPath, '→', key);
+          return asset;
+        }
+      }
+    }
+    
+    if (closestDist <= maxDifference && closestAsset) {
+      console.log('[RenderPreview] 에셋 근사 매칭 (거리', closestDist + '):', srcPath);
+      return closestAsset;
+    }
+    
+    return null;
+  }
+
   // 에셋 경로를 dataUrl로 변환
   function resolveAssetUrls(content: string): string {
     if (!content) return content;
@@ -31,7 +100,37 @@
       resolved = resolved.replace(new RegExp(`~risuasset:${escapeRegex(key)}`, 'g'), asset.dataUrl);
       resolved = resolved.replace(new RegExp(`~risuasset:assets/${escapeRegex(key)}`, 'g'), asset.dataUrl);
       resolved = resolved.replace(new RegExp(`\\{\\{asset::${escapeRegex(key)}\\}\\}`, 'g'), asset.dataUrl);
+      
+      // src="파일명" 형식도 치환 (일반 HTML img 태그)
+      resolved = resolved.replace(new RegExp(`src="${escapeRegex(key)}"`, 'g'), `src="${asset.dataUrl}"`);
+      resolved = resolved.replace(new RegExp(`src='${escapeRegex(key)}'`, 'g'), `src='${asset.dataUrl}'`);
+      
+      // assets/ 경로 포함된 경우도 처리
+      if (!key.startsWith('assets/')) {
+        resolved = resolved.replace(new RegExp(`src="assets/${escapeRegex(key)}"`, 'g'), `src="${asset.dataUrl}"`);
+        resolved = resolved.replace(new RegExp(`src='assets/${escapeRegex(key)}'`, 'g'), `src='${asset.dataUrl}'`);
+      }
     }
+    
+    // RisuAI 방식: 매칭 안 된 src 속성에 대해 베이스네임 폴백
+    resolved = resolved.replace(/src=["']([^"']+)["']/g, (match, srcPath) => {
+      // 이미 dataUrl이면 스킵
+      if (srcPath.startsWith('data:') || srcPath.startsWith('blob:') || srcPath.startsWith('http')) {
+        return match;
+      }
+      
+      console.log('[RenderPreview] src 매칭 시도:', srcPath, '에셋키:', [...assets.keys()]);
+      
+      // 베이스네임으로 찾기
+      const found = findAssetByBasename(srcPath);
+      if (found) {
+        console.log('[RenderPreview] ✅ 에셋 매칭 성공:', srcPath);
+        return `src="${found.dataUrl}"`;
+      }
+      
+      console.log('[RenderPreview] ❌ 에셋 매칭 실패:', srcPath);
+      return match;
+    });
     
     return resolved;
   }
@@ -73,44 +172,59 @@
         continue;
       }
       
-      // ableFlag가 false면 스킵
-      if (script.ableFlag === false) {
-        console.log('[RenderPreview] ⏭️ ableFlag=false로 스킵');
-        continue;
-      }
+      // ableFlag는 "커스텀 플래그 사용 여부"이지 "활성화 여부"가 아님
+      // ableFlag: false = 기본 플래그 사용, ableFlag: true = 사용자 지정 플래그 사용
       
       try {
         console.log('[RenderPreview] 🔧 정규식 생성 시도:', {
           in: script.in,
           flag: script.flag,
+          ableFlag: script.ableFlag,
           inType: typeof script.in
         });
         
-        // 플래그에서 CBS 태그 등 제거하고 유효한 플래그만 추출
-        let rawFlags = script.flag || 'g';
+        // ableFlag가 true면 사용자 지정 플래그 사용, false면 기본 플래그 'g'
+        let rawFlags = (script.ableFlag === true && script.flag) ? script.flag : 'g';
         // <cb>, <cbs> 등의 태그 제거
         rawFlags = rawFlags.replace(/<[^>]+>/g, '');
         // 유효한 플래그만 남기기 (g, i, m, s, u, y)
         const flags = rawFlags.split('').filter(c => 'gimsuy'.includes(c)).join('') || 'g';
         
-        console.log('[RenderPreview] 🔧 플래그 정리:', { 원본: script.flag, 정리됨: flags });
+        console.log('[RenderPreview] 🔧 플래그 정리:', { 원본: script.flag, ableFlag: script.ableFlag, 정리됨: flags });
         
         const regex = new RegExp(script.in, flags);
         console.log('[RenderPreview] ✓ 정규식 생성 성공');
         
-        const matched = regex.test(text);
+        // reset lastIndex for global regex
+        regex.lastIndex = 0;
+        const matched = regex.test(result);
+        regex.lastIndex = 0;
         
         console.log('[RenderPreview] 🔍 패턴 테스트:', {
           이름: script.comment,
           패턴: script.in,
           플래그: flags,
-          매치됨: matched,
-          입력에패턴있음: text.includes(script.in)
+          매치됨: matched
         });
         
         if (matched) {
           const before = result;
-          result = result.replace(regex, script.out);
+          
+          // RisuAI CBS 캡처 그룹 문법을 JavaScript 문법으로 변환
+          // {{raw::$1}} → $1, {{raw::$2}} → $2, etc.
+          let outTemplate = script.out || '';
+          outTemplate = outTemplate.replace(/\{\{raw::\$(\d+)\}\}/g, '$$$1');
+          
+          // 표지판 regex의 전체 out 확인
+          if (script.comment === '표지판') {
+            console.log('[RenderPreview] 📋 표지판 전체 OUT:', script.out);
+          }
+          console.log('[RenderPreview] 📝 치환 전:', {
+            이름: script.comment,
+            out원본: script.out?.slice(0, 100),
+            out변환: outTemplate?.slice(0, 100)
+          });
+          result = result.replace(regex, outTemplate);
           console.log('[RenderPreview] ✅ 정규식 적용됨:', {
             이름: script.comment,
             출력길이: result.length,
@@ -200,16 +314,39 @@
 <\/script>
 `;
 
-  // 단락 구분을 위한 스타일
+  // RisuAI 기본 스타일 + 버튼 스타일
+  // RisuAI와 동일한 렌더링 환경을 제공
   const paragraphStyle = `
 <style>
+  /* RisuAI 기본 CSS 변수 (다크 테마 기준) */
+  :root {
+    --FontColorStandard: #fafafa;
+    --FontColorBold: #e5e5e5;
+    --FontColorItalic: #8c8d93;
+    --FontColorItalicBold: #8c8d93;
+    --FontColorQuote1: #8c8d93;
+    --FontColorQuote2: #8c8d93;
+    --risu-theme-bgcolor: #282a36;
+    --risu-theme-darkbg: #21222c;
+    --risu-theme-borderc: #6272a4;
+    --risu-theme-selected: #44475a;
+    --risu-theme-draculared: #ff5555;
+    --risu-theme-textcolor: #f5f5f5;
+    --risu-theme-textcolor2: #64748b;
+  }
+  
+  * {
+    box-sizing: border-box;
+  }
+  
   body {
-    line-height: 1.8;
+    margin: 0;
     padding: 16px;
+    font-family: Arial, sans-serif, serif;
+    color: var(--risu-theme-textcolor);
+    background: var(--risu-theme-bgcolor);
   }
-  p, div {
-    margin-bottom: 1em;
-  }
+  
   /* 버튼 기본 스타일 */
   .button-default, [risu-trigger] {
     display: inline-block;
@@ -237,6 +374,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- 폰트 preconnect for faster loading -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Noto Sans KR 폰트 preload (표지판 등에서 사용) -->
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
   ${backgroundHTML}
   ${paragraphStyle}
 </head>

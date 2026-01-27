@@ -14,22 +14,30 @@
     
     // charx, jpeg, png 모두 동일한 CCv3 구조
     if (type === 'charx' || type === 'jpeg' || type === 'png') {
-      // transformCharxData 반환 구조: { card, cardData, ... }
+      // transformCharxData 반환 구조: { card, cardData, lorebook, regex, trigger, assets, ... }
       // cardData = card.data (이미 추출됨)
       const cardData = data?.cardData || data?.card?.data || data;
       const risuExt = cardData?.extensions?.risuai || {};
       
+      // charx 내부 module.risum에서 backgroundEmbedding 확인
+      const moduleData = data?._moduleData;
+      
       console.log('[ScriptTab] charx/jpeg/png paths:', {
         hasCardData: !!data?.cardData,
         hasCard: !!data?.card,
+        hasModuleData: !!moduleData,
         cardData_keys: Object.keys(cardData || {}),
         extensions_keys: Object.keys(cardData?.extensions || {}),
         risuExt_keys: Object.keys(risuExt),
         backgroundHTML: risuExt?.backgroundHTML?.substring?.(0, 100) || risuExt?.backgroundHTML,
+        moduleBackgroundEmbedding: moduleData?.backgroundEmbedding?.substring?.(0, 100),
       });
       
+      // 우선순위: risuExt.backgroundHTML > moduleData.backgroundEmbedding
+      const backgroundEmbedding = risuExt?.backgroundHTML || moduleData?.backgroundEmbedding || '';
+      
       return {
-        backgroundEmbedding: risuExt?.backgroundHTML || '',
+        backgroundEmbedding,
       };
     } else {
       // risum 모듈

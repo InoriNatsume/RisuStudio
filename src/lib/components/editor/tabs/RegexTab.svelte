@@ -15,6 +15,7 @@
   let typeFilter = 'all';  // 타입 필터
   let dslEditor: DSLEditor;
   let displayMode: 'all' | 'single' = 'all';  // 전체 보기 vs 개별 보기
+  let showHtmlPreview = false;  // HTML 미리보기 표시 여부
 
   // 코드 에디터 내 검색
   let codeSearchQuery = '';
@@ -112,19 +113,22 @@
 
   /** 긴 HTML 문자열을 읽기 좋게 포맷팅 */
   function formatLongString(str: string): string {
-    // 이미 줄바꿈이 있으면 그대로 반환
-    if (str.includes('\n')) return str;
-    
     // HTML 태그가 없으면 그대로 반환
     if (!str.includes('<')) return str;
     
-    // 주요 블록 태그 앞에 줄바꿈 추가
+    // 줄바꿈이 있어도 HTML이면 추가 포맷팅 적용
+    
+    // 주요 블록 태그 앞뒤에 줄바꿈 추가
     let formatted = str
       .replace(/></g, '>\n<')  // 태그 사이에 줄바꿈
       .replace(/(<\/div>)/gi, '$1\n')  // div 닫기 후 줄바꿈
       .replace(/(<div)/gi, '\n$1')  // div 시작 전 줄바꿈
       .replace(/(<style)/gi, '\n$1')  // style 시작 전 줄바꿈
       .replace(/(<\/style>)/gi, '$1\n')  // style 닫기 후 줄바꿈
+      .replace(/(<input)/gi, '\n$1')  // input 시작 전 줄바꿈
+      .replace(/(<label)/gi, '\n$1')  // label 시작 전 줄바꿈
+      .replace(/(<button)/gi, '\n$1')  // button 시작 전 줄바꿈
+      .replace(/(<span)/gi, '\n$1')  // span 시작 전 줄바꿈
       .replace(/\n\n+/g, '\n')  // 중복 줄바꿈 제거
       .trim();
     
@@ -406,6 +410,23 @@
       <button class="btn-add" on:click={addEntry}>+ 추가</button>
       <span class="count">총 {regexList.length}개</span>
     </div>
+    
+    <!-- HTML 미리보기 섹션 -->
+    {#if selectedIndex >= 0 && regexList[selectedIndex]?.out?.includes('<')}
+      <div class="html-preview-section">
+        <div class="preview-header">
+          <span>🖼️ HTML 미리보기</span>
+          <button class="preview-toggle" on:click={() => showHtmlPreview = !showHtmlPreview}>
+            {showHtmlPreview ? '접기' : '펼치기'}
+          </button>
+        </div>
+        {#if showHtmlPreview}
+          <div class="html-preview-container">
+            {@html regexList[selectedIndex].out}
+          </div>
+        {/if}
+      </div>
+    {/if}
   </aside>
 </div>
 
@@ -836,5 +857,44 @@
   .tool-btn.active {
     background: var(--risu-theme-primary, #4a9eff);
     color: white;
+  }
+
+  /* HTML 미리보기 섹션 */
+  .html-preview-section {
+    border-top: 1px solid var(--risu-theme-borderc, #444);
+    padding: 0.5rem;
+    background: var(--risu-theme-bgcolor, #1a1a1a);
+  }
+
+  .preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    font-size: 0.75rem;
+    color: var(--risu-theme-textcolor, #fff);
+  }
+
+  .preview-toggle {
+    padding: 0.25rem 0.5rem;
+    background: var(--risu-theme-darkbg, #252525);
+    color: var(--risu-theme-textcolor2, #888);
+    border: 1px solid var(--risu-theme-borderc, #444);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.7rem;
+  }
+
+  .preview-toggle:hover {
+    color: var(--risu-theme-textcolor, #fff);
+  }
+
+  .html-preview-container {
+    max-height: 300px;
+    overflow: auto;
+    background: #fff;
+    border-radius: 4px;
+    padding: 0.5rem;
+    font-size: 0.8rem;
   }
 </style>

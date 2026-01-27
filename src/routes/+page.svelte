@@ -60,12 +60,19 @@
         console.log('[charx] module.risum 파싱 성공:', {
           name: moduleData?.name,
           regex: moduleData?.regex?.length,
-          trigger: moduleData?.trigger?.length
+          trigger: moduleData?.trigger?.length,
+          backgroundEmbedding: moduleData?.backgroundEmbedding?.substring?.(0, 100)
         });
       } catch (e) {
         console.warn('[charx] module.risum 파싱 실패:', e);
       }
     }
+    
+    // backgroundHTML 로그 추가
+    console.log('[charx] backgroundHTML 확인:', {
+      'risuext.backgroundHTML': risuext?.backgroundHTML?.substring?.(0, 100),
+      'moduleData.backgroundEmbedding': moduleData?.backgroundEmbedding?.substring?.(0, 100)
+    });
     
     // 에셋 딕셔너리 생성 (경로 → 바이트 데이터)
     const assetDict: Record<string, Uint8Array> = {};
@@ -339,6 +346,8 @@
       trigger,
       // 에셋
       assets: assetMap,
+      // 모듈 데이터 (charx 내부 module.risum에서 파싱한 경우)
+      _moduleData: moduleData,
       // 원본
       _raw: raw,
       type: 'charx'
