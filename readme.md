@@ -1,6 +1,7 @@
 # RisuStudio
 
 https://inorinatsume.github.io/RisuStudio/
+
 RisuAI 캐릭터 카드(.charx), 모듈(.risum), 프리셋(.risup) 뷰/편집. 편집기능은 아직 검증이 충분치 않음.
 AI 에이전트나 IDE를 통한 렌더링 연동, 깃 백업 관련으로 불편해서 잠정 중단. 뷰어/다운로드 용 및 차후 개발을 위해 기록으로 남겨둠.
 
@@ -80,7 +81,7 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 |------|------|
 | [RisuStudio_Specification.md](RisuStudio_Specification.md) | 설계 문서 |
 | [RisuStudio_Progress.md](RisuStudio_Progress.md) | 진행 현황 |
-| [RisuAI_Format_Specification.md](RisuAI_Format_Specification.md) | 파일 포맷 사양서 |
+| [RISUAI_RENDERING_LOGIC.md](RISUAI_RENDERING_LOGIC.md) | 렌더링 관련 |
 
 ## 🛠️ 기술 스택
 
