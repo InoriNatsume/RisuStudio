@@ -90,15 +90,13 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 ## 📜 크레딧
 
 - **RisuAI** (GPL 3.0 License)
-https://github.com/kwaroran/RisuAI
+  - https://github.com/kwaroran/RisuAI
 - **챈산 자료**: 
-모듈 매니저, 에셋의 신, 정리의 신, 프리셋 매니저, 슈파봇, CBS 에디터
-https://arca.live/b/characterai/156605199
+  - 모듈 매니저: https://arca.live/b/characterai/155936654
+  - 에셋의 신: https://arca.live/b/characterai/159771658
+  - 프리셋 매니저: https://arca.live/b/characterai/157632819
 - **참조 프로젝트**:
   - https://github.com/snuff8729/RisuExtractUtil
   - https://github.com/noelkim12/risu-resource-manager/
   - https://github.com/MetaMyong/RisuAI-Interface-Generation
 
-## 📄 라이선스
-
-GPL 3.0 (RisuAI와 동일)

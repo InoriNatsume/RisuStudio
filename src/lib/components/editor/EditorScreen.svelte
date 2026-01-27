@@ -11,8 +11,6 @@
   import PresetParamsTab from './tabs/PresetParamsTab.svelte';
   import PresetPromptsTab from './tabs/PresetPromptsTab.svelte';
   import PresetAdvancedTab from './tabs/PresetAdvancedTab.svelte';
-  // 시뮬레이터
-  import { SimulatorPanel } from '$lib/components/simulator';
 
   export let data: any;
   export let fileType: 'charx' | 'risum' | 'risup';
@@ -45,7 +43,6 @@
       { id: 'trigger', label: 'Trigger', icon: '⚡', count: triggerCount },
       { id: 'assets', label: '에셋', icon: '🖼️', count: assetCount },
       { id: 'script', label: '스크립트', icon: '📜', count: 0 },
-      { id: 'simulator', label: '시뮬레이터', icon: '🎮', count: 0 },
     ];
 
     // 프리셋 전용 탭들
@@ -60,7 +57,7 @@
       case 'charx':
         return allTabs; // 전부
       case 'risum':
-        return allTabs.filter(t => ['info', 'lorebook', 'regex', 'trigger', 'assets', 'script', 'simulator'].includes(t.id));
+        return allTabs.filter(t => ['info', 'lorebook', 'regex', 'trigger', 'assets', 'script'].includes(t.id));
       case 'risup':
         return presetTabs;
       default:
@@ -460,12 +457,6 @@
           <AssetTab data={editedData} on:change={handleDataChange} />
         {:else if activeTab === 'script'}
           <ScriptTab data={editedData} {fileType} on:change={handleDataChange} />
-        {:else if activeTab === 'simulator'}
-          <SimulatorPanel 
-            characterData={editedData} 
-            moduleData={editedData?.module}
-            presetData={null}
-          />
         {/if}
       {/if}
     {:else}

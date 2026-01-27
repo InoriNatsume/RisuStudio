@@ -1,7 +1,7 @@
 # RisuStudio 진행 현황
 
-> **최종 업데이트**: 2026-01-26
-> **현재 단계**: Phase 3 완료 ✅ - Phase 4 준비 중
+> **최종 업데이트**: 2026-01-27
+> **현재 단계**: Phase 2 완료 ✅ - 순수 에디터로 경량화
 
 ---
 
@@ -11,29 +11,24 @@
 Phase 0: 설계 및 준비     ████████████████████ 100%
 Phase 1: 핵심 기반        ████████████████████ 100% ✅
 Phase 2: 편집기           ████████████████████ 100% ✅
-Phase 3: 시뮬레이터       ████████████████████ 100% ✅
-Phase 4: 통합 & AI        ████░░░░░░░░░░░░░░░░  20%
-Phase 5: 완성도           ░░░░░░░░░░░░░░░░░░░░   0%
+Phase 3: 완성도           ████░░░░░░░░░░░░░░░░  20%
 ─────────────────────────────────────────────────
-전체 진행률              █████████████████░░░  85%
+전체 진행률              ███████████████░░░░░  75%
 ```
 
 ---
 
 ## 🎯 다음 작업 (Next Actions)
 
-> **현재 해야 할 일**: Phase 4 시작 - 통합 & AI 기능
+> **현재 해야 할 일**: Phase 3 시작 - 완성도
 
-### Phase 4 목표
-1. [ ] 프리셋 라이브러리 통합
-2. [ ] AI 어시스턴트 (Copilot 스타일)
-3. [ ] 내보내기/가져오기 개선
-4. [ ] 실시간 미리보기
+### Phase 3 목표
+1. [ ] 프리셋 편집 완성
+2. [ ] NAI/ST 프리셋 변환 임포트
+3. [ ] 실시간 검증 UI
+4. [ ] PWA 및 배포 준비
 
-### 테스트 현황 (215개 통과 ✅)
-- CBS 테스트: 56개 ✅
-- Regex 테스트: 16개 ✅
-- Trigger 테스트: 14개 ✅
+### 테스트 현황 (145개 통과 ✅)
 - Binary 테스트: 16개 ✅
 - Risum 테스트: 6개 ✅
 - Crypto 테스트: 7개 ✅
@@ -41,7 +36,7 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 - Validation 테스트: 31개 ✅
 - Schema 테스트: 41개 ✅
 - Parser Snapshot 테스트: 15개 ✅
-- **Simulator 테스트: 8개 ✅** (NEW)
+- EXIF 테스트: 24개 ✅
 
 ---
 
@@ -57,43 +52,35 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 
 ---
 
-## ✅ Phase 3 완료 (2026-01-26)
+## ✅ 아키텍처 결정 (2026-01-27)
 
-### CBS 런타임 확장 ✅
-- [x] **100+ 명령어 추가**: RisuAI cbs.ts 분석 후 완전 호환
-- [x] **채팅 히스토리**: previouscharchat, userhistory, history, messagen
-- [x] **캐릭터 정보**: personality, description, scenario, charname
-- [x] **시간 함수**: isotime, messagetime, unixtime, localtime
-- [x] **배열 함수**: arraysplice, filter, range, length
-- [x] **유니코드**: unicodeencode, unicodedecode, hash
-- [x] **주사위**: dice, pick, rollp, roll
-- [x] **XOR 암호화**: xorencode, xordecode
-- [x] **에셋 명령어**: audio, play, stop
-- [x] **조건부 블록**: #if, #when, #each
-- [x] **CBSContext 확장**: history, persona, jailbreak, model, role 등 15+ 필드
+### 시뮬레이터 분리 결정
+RisuStudio는 **순수 에디터**로 경량화하고, 시뮬레이터는 별도 프로젝트로 분리:
 
-### Regex 엔진 + 디버거 ✅
-- [x] **RegexEngine 클래스**: process(), applyScript(), validatePattern(), testScript()
-- [x] **4가지 모드**: editinput, editoutput, editprocess, editdisplay
-- [x] **RegexDebugger 클래스**: runAll(), stepForward(), goToStep(), getHighlightedText()
-- [x] **단계별 디버깅**: 각 스크립트 적용 전후 텍스트 추적
-- [x] **테스트 16개**: 기본 동작, 모드 필터링, 다중 스크립트, 에러 처리
+**RisuStudio (이 프로젝트)**
+- 캐릭터 카드 편집
+- 스크립트 편집 (CBS, Regex, Trigger)
+- 에셋 관리
+- Import/Export (charx, risum, risup)
+- 문법 하이라이팅
 
-### Trigger V2 엔진 + 디버거 ✅
-- [x] **TriggerEngine 클래스**: run(), checkConditions(), executeEffect()
-- [x] **V1 효과**: setvar, cutchat, modifychat, systemprompt, impersonate
-- [x] **V2 효과**: v2ConsoleLog, v2RunCBS, v2LuaCode, v2Comment, v2Break
-- [x] **조건 처리**: var, chatIndex, always 조건, 비교 연산자
-- [x] **TriggerDebugger 클래스**: runAll(), stepForward(), getCurrentState()
-- [x] **테스트 14개**: 기본 동작, 조건 처리, 채팅 조작, 중단
+**risu-simulator (별도 프로젝트, 미래)**
+- 완전한 채팅 시뮬레이션
+- 채팅 히스토리 관리
+- 변수 상태 추적
+- 트리거 디버깅
 
-### 시뮬레이터 UI 완성 ✅ (NEW)
-- [x] **SimulatorPanel.svelte**: 메인 패널, 4탭 구조 (Prompt/CBS/Regex/Trigger)
-- [x] **PromptPreview.svelte**: 프롬프트 섹션 시각화, 토큰 추정
-- [x] **CBSDebugPanel.svelte**: CBS 라이브 테스터, 예제, 명령어 레퍼런스
-- [x] **RegexDebugPanel.svelte**: Regex 테스터, 단계별 디버거, 모드 필터
-- [x] **TriggerDebugPanel.svelte**: Trigger 스크립트 뷰어, 단계별 디버거
-- [x] **통합 테스트 8개**: CBS→Regex→Trigger 워크플로우, 에러 처리
+### 분리 이유
+- CBS 변수는 **채팅 히스토리 컨텍스트** 필요
+- 단일 메시지로는 상태 축적 불가
+- 에디터 복잡도 증가 방지
+
+### 제거된 코드
+- `src/routes/simulator/` - 시뮬레이터 페이지
+- `src/lib/components/simulator/` - 시뮬레이터 컴포넌트
+- `src/lib/core/cbs/` - CBS 파서/런타임
+- `src/lib/risuai/` - RisuAI 원본 파일
+- `src/lib/risuai-adapter/` - 어댑터 스텀
 
 ---
 
@@ -233,6 +220,7 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 ├── RisuStudio_Specification.md    ← 메인 설계 문서
 ├── RisuStudio_Progress.md         ← 개발 진행 현황 (이 문서)
 ├── RisuAI_Format_Specification.md ← 파일 포맷 사양서 (★)
+├── RISUAI_RENDERING_LOGIC.md      ← 렌더링 로직 분석 (참조용)
 ├── risustudio/                    ← 프로젝트 소스 코드
 │   ├── scripts/extract.ts         ← Extract CLI (완성)
 │   ├── src/lib/components/editor/ ← 편집기 컴포넌트 (★)
@@ -245,9 +233,9 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 │   │       ├── RegexTab.svelte
 │   │       ├── TriggerTab.svelte
 │   │       ├── AssetTab.svelte      ← 에셋 관리 (다운로드/ZIP/EXIF)
-│   │       ├── ScriptTab.svelte     ← 스크립트 편집 (backgroundEmbedding) ★ NEW
+│   │       ├── ScriptTab.svelte     ← 스크립트 편집 (backgroundEmbedding)
 │   │       └── PresetParamsTab.svelte
-│   ├── src/lib/core/exif/           ← EXIF 추출 (★ NEW)
+│   ├── src/lib/core/exif/           ← EXIF 추출
 │   │   ├── index.ts
 │   │   ├── extractor.ts
 │   │   ├── types.ts
@@ -350,14 +338,6 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 - [x] `src/lib/core/types/preset.ts` - Preset 인터페이스
 - [x] `src/lib/core/types/index.ts` - 통합 export
 - [x] `src/lib/core/logger.ts` - 로깅 시스템
-
-### Core Layer - CBS 기초 ✅
-
-- [x] `src/lib/core/cbs/types.ts` - CBS 타입 정의
-- [x] `src/lib/core/cbs/parser.ts` - CBS 파서 (AST)
-- [x] `src/lib/core/cbs/commands.ts` - 내장 명령어 (60+)
-- [x] `src/lib/core/cbs/runtime.ts` - 실행 엔진
-- [x] `src/lib/core/cbs/cbs.test.ts` - 단위 테스트 (56개)
 
 ### UI 기반
 
@@ -475,90 +455,7 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 
 ---
 
-## Phase 3: 시뮬레이터 (예상 3주)
-
-> **참조**: `Risuai-2026.1.184/src/ts/process/cbs.ts`, `triggers.ts`
-
-### CBS 런타임 확장
-
-- [ ] RisuAI cbs.ts에서 명령어 추출
-- [ ] 모든 CBS 명령어 구현
-- [ ] 실행 추적 (Trace) 기능
-- [ ] 에러 처리
-
-### Regex 엔진
-
-- [ ] `src/lib/core/regex/engine.ts`
-- [ ] IN/OUT 패턴 적용
-- [ ] 점진적 디버거 (캡처 그룹 표시)
-- [ ] 에러 하이라이트
-
-### Trigger 엔진
-
-- [ ] `src/lib/core/trigger/v2Engine.ts`
-- [ ] V2 조건 평가 로직
-- [ ] V2 효과 실행 로직
-- [ ] Lua 런타임 (wasmoon)
-
-### 시뮬레이터 UI
-
-- [ ] `SimulatorScreen.svelte`
-- [ ] CBS 패널
-- [ ] Regex 패널
-- [ ] Trigger 패널
-- [ ] HTML/CSS 패널
-- [ ] 변수 패널 (chatVar/globalVar)
-- [ ] 실행 추적 표시
-
-### 채팅 시뮬레이터
-
-- [ ] 가상 채팅 인터페이스
-- [ ] 메시지 입력/출력
-- [ ] Trigger 이벤트 발생
-
-### Phase 3 완료 조건
-- [ ] CBS 코드 실행 및 결과 표시
-- [ ] Regex 테스트 및 디버깅
-- [ ] Trigger 조건/효과 테스트
-- [ ] 변수 실시간 조작
-
----
-
-## Phase 4: 통합 & AI (예상 2주)
-
-> **참조**: `EXIF_Extraction_Comparison.md`
-
-### 통합 테스트 기능
-
-- [ ] `IntegratedScreen.svelte`
-- [ ] 다중 파일 로드
-- [ ] Regex 체인 분석
-- [ ] Trigger 체인 분석
-- [ ] 충돌 감지 (중복 패턴)
-- [ ] 변수 충돌 감지
-
-### AI 헬퍼
-
-- [ ] `src/lib/services/aiHelper.ts`
-- [ ] Copy for AI 기능
-- [ ] CBS 레퍼런스 자동 포함
-- [ ] 컨텍스트 조합
-
-### 에셋 메타데이터
-
-- [x] NAI 스테가노그래피 추출 ✅
-- [x] ComfyUI 노드 검색 ✅
-- [x] A1111 parameters 파싱 ✅
-- [x] 정규화된 뷰어 ✅
-
-### Phase 4 완료 조건
-- [ ] 프리셋+캐릭터+모듈 조합 분석
-- [ ] Copy for AI 작동
-- [x] AI 이미지 메타데이터 표시 ✅
-
----
-
-## Phase 5: 완성도 (예상 1주)
+## Phase 3: 완성도 (예상 1주)
 
 > **참조**: `RisuExtractUtil/src/preset.ts`
 
@@ -573,14 +470,13 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 
 - [ ] 실시간 검증 UI
 - [ ] 저장 전 검증
-- [ ] 검증 결과 Copy for AI
+- [ ] 검증 결과 표시
 
 ### 설정 화면
 
 - [ ] `SettingsScreen.svelte`
-- [ ] API 키 설정
 - [ ] 에디터 설정
-- [ ] CBS 레퍼런스 선택
+- [ ] 테마 설정
 
 ### 배포 준비
 
@@ -589,10 +485,39 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 - [ ] GitHub Pages 배포
 - [ ] README 작성
 
-### Phase 5 완료 조건
+### Phase 3 완료 조건
 - [ ] 모든 파일 포맷 지원
 - [ ] 프로덕션 배포 완료
 - [ ] 문서화 완료
+
+---
+
+## Phase 4: 미래 계획 (선택적)
+
+> **참조**: `EXIF_Extraction_Comparison.md`
+
+### 통합 테스트 기능
+
+- [ ] 다중 파일 로드
+- [ ] Regex 체인 분석
+- [ ] Trigger 체인 분석
+- [ ] 충돌 감지 (중복 패턴)
+
+### AI 헬퍼 (선택적)
+
+- [ ] Copy for AI 기능
+- [ ] 컨텍스트 조합
+
+### 에셋 메타데이터
+
+- [x] NAI 스테가노그래피 추출 ✅
+- [x] ComfyUI 노드 검색 ✅
+- [x] A1111 parameters 파싱 ✅
+- [x] 정규화된 뷰어 ✅
+
+### Phase 4 완료 조건
+- [ ] Copy for AI 작동
+- [x] AI 이미지 메타데이터 표시 ✅
 
 ---
 
@@ -616,9 +541,9 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 
 | 날짜 | 결정 | 이유 |
 |------|------|------|
+| 2026-01-27 | 시뮬레이터 분리 | CBS 변수는 채팅 컨텍스트 필요 |
 | 2026-01-25 | Svelte 4 사용 | RisuAI 플러그인과 일관성 |
 | 2026-01-25 | fflate + msgpackr | 최소 번들 크기 |
-| 2026-01-25 | wasmoon은 P1 | 번들 크기 고려해 선택적 |
 | 2026-01-25 | 순수 JS ZIP 생성 | 외부 라이브러리 없이 다운로드 |
 | 2026-01-25 | IntersectionObserver | 대용량 에셋 지연 로딩 |
 | 2026-01-25 | 가상 스크롤링 100개 | 1만개+ 에셋 성능 최적화 |
@@ -627,9 +552,10 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 
 | 기능 | 이유 | 재검토 시점 |
 |------|------|------------|
-| VS Code 연동 | 복잡도 | Phase 5 이후 |
+| 시뮬레이터 | 별도 프로젝트로 분리 | risu-simulator |
+| VS Code 연동 | 복잡도 | v2.0 |
 | 실시간 협업 | 범위 초과 | v2.0 |
-| 에셋 썸네일 캐시 | IndexedDB 필요 | Phase 5 |
+| 에셋 썸네일 캐시 | IndexedDB 필요 | Phase 3 |
 
 ---
 
