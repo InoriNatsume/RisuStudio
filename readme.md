@@ -1,10 +1,11 @@
 # RisuStudio
 
-RisuAI 캐릭터 카드(.charx), 모듈(.risum), 프리셋(.risup)을 위한 **통합 개발 및 테스트 환경**.
+RisuAI 캐릭터 카드(.charx), 모듈(.risum), 프리셋(.risup) 뷰/편집. 편집기능은 아직 검증이 충분치 않음.
+AI 에이전트나 IDE를 통한 렌더링 연동, 깃 백업 관련으로 불편해서 잠정 중단. 뷰어/다운로드 용 및 차후 개발을 위해 기록으로 남겨둠.
 
 ## 🎯 목표
 
-RisuAI 없이도 캐릭터 카드, 모듈, 프리셋을 개발하고 테스트할 수 있는 IDE.
+RisuAI 없이도 캐릭터 카드, 모듈, 프리셋을 개발.
 
 ## ✨ 주요 기능
 
@@ -92,11 +93,11 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 - **RisuAI** (GPL 3.0 License)
   - https://github.com/kwaroran/RisuAI
 - **챈산 자료**: 
-  - 모듈 매니저: https://arca.live/b/characterai/155936654
-  - 에셋의 신: https://arca.live/b/characterai/159771658
-  - 프리셋 매니저: https://arca.live/b/characterai/157632819
-- **참조 프로젝트**:
-  - https://github.com/snuff8729/RisuExtractUtil
-  - https://github.com/noelkim12/risu-resource-manager/
-  - https://github.com/MetaMyong/RisuAI-Interface-Generation
+  - 모듈 매니저: https://arca.live/b/characterai/155936654. UI, CBS 하이라이트, 자동완성, 유효성 검증 스키마 등등 매우 많음..
+  - 에셋의 신: https://arca.live/b/characterai/159771658. 에셋 갤러리 뷰, 메타데이터 확장
+  - 정리의 신: CRUD UI 패턴
+  - 프리셋 매니저: https://arca.live/b/characterai/157632819. Diff 비교 로직
+- **깃허브**:
+  - https://github.com/snuff8729/RisuExtractUtil. 각 포맷별 파싱 코드
+  - https://github.com/noelkim12/risu-resource-manager/. 모듈매니저와 함께 이 리포토리지의 모티브가 됨. 파싱관련 및 docs.
 
