@@ -93,7 +93,7 @@ Phase 5: 완성도           ░░░░░░░░░░░░░░░░░
 - **RisuAI** (GPL 3.0 License)
   - https://github.com/kwaroran/RisuAI
 - **챈산 자료**: 
-  - 모듈 매니저: https://arca.live/b/characterai/155936654. UI, CBS 하이라이트, 자동완성, 유효성 검증 스키마 등등 매우 많음..
+  - 모듈 매니저: https://arca.live/b/characterai/155936654. UI, CBS하이라이트, 자동완성, 유효성 검증 스키마 등등 매우 많음..
   - 에셋의 신: https://arca.live/b/characterai/159771658. 에셋 갤러리 뷰, 메타데이터 확장
   - 정리의 신: CRUD UI 패턴
   - 프리셋 매니저: https://arca.live/b/characterai/157632819. Diff 비교 로직
