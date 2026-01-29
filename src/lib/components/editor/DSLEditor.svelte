@@ -357,7 +357,7 @@
         highlightActiveLineGutter(),
         highlightActiveLine(),
         history(),
-        drawSelection(),
+        // drawSelection(), // 브라우저 기본 선택 사용
         keymap.of([...defaultKeymap, ...historyKeymap]),
         darkTheme,
         cbsPlugin,
