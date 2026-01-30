@@ -65,8 +65,74 @@
     }
   }
 
-  // 편집된 데이터
-  $: editedData = data ? structuredClone(data) : null;
+  /**
+   * 대용량 에셋 데이터를 제외하고 얕은 복사를 수행합니다.
+   * structuredClone()은 대용량 파일(1GB+)에서 메모리 부족 오류를 일으킵니다.
+   * 에셋 데이터(Uint8Array)는 복제하지 않고 참조만 유지합니다.
+   */
+  function shallowCloneData(data: any): any {
+    if (!data) return null;
+    
+    const clone: any = {};
+    
+    for (const key of Object.keys(data)) {
+      const value = data[key];
+      
+      // assets는 참조만 유지 (대용량 바이너리 데이터)
+      if (key === 'assets') {
+        clone[key] = value; // Map<string, Uint8Array> 참조 유지
+        continue;
+      }
+      
+      // module 내부도 재귀 처리
+      if (key === 'module' && value && typeof value === 'object') {
+        clone[key] = {};
+        for (const moduleKey of Object.keys(value)) {
+          if (moduleKey === 'assets') {
+            clone[key][moduleKey] = value[moduleKey]; // 참조 유지
+          } else if (Array.isArray(value[moduleKey])) {
+            // 배열은 structuredClone 사용 (lorebook, regex, trigger 등)
+            try {
+              clone[key][moduleKey] = structuredClone(value[moduleKey]);
+            } catch {
+              clone[key][moduleKey] = value[moduleKey];
+            }
+          } else {
+            clone[key][moduleKey] = value[moduleKey];
+          }
+        }
+        continue;
+      }
+      
+      // 배열이면 복제 시도
+      if (Array.isArray(value)) {
+        try {
+          clone[key] = structuredClone(value);
+        } catch {
+          clone[key] = value;
+        }
+        continue;
+      }
+      
+      // 일반 객체면 얕은 복사
+      if (value && typeof value === 'object' && !(value instanceof Uint8Array)) {
+        try {
+          clone[key] = structuredClone(value);
+        } catch {
+          clone[key] = value;
+        }
+        continue;
+      }
+      
+      // 기본값은 그대로 복사
+      clone[key] = value;
+    }
+    
+    return clone;
+  }
+
+  // 편집된 데이터 (에셋 제외 얕은 복사)
+  $: editedData = data ? shallowCloneData(data) : null;
 
   // 변경 감지
   let hasChanges = false;
