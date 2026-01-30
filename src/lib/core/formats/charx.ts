@@ -218,8 +218,22 @@ export function normalizeToV3(card: CharacterCard): CharacterCardV3 {
 }
 
 /**
+ * Base64 문자열을 Uint8Array로 디코딩 (Latin1 인코딩된 문자열 대응)
+ */
+function base64ToUint8Array(base64: string): Uint8Array {
+  // atob()는 Latin1 문자열을 기대하므로 직접 변환
+  const binaryStr = atob(base64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
  * PNG 캐릭터 카드 파싱
  * PNG tEXt 청크에서 chara/ccv3 데이터 추출
+ * V2, V3 모두 지원
  */
 export async function parsePng(data: Uint8Array): Promise<CharxResult> {
   logger.debug('png', '파싱 시작', { size: data.length });
@@ -233,7 +247,8 @@ export async function parsePng(data: Uint8Array): Promise<CharxResult> {
   }
   
   let pos = 8;
-  let charaData: string | null = null;
+  let charaData: Uint8Array | null = null;  // Uint8Array로 변경
+  let charaKeyword: string = '';
   const embeddedAssets = new Map<string, Uint8Array>();
   
   while (pos < data.length) {
@@ -253,20 +268,25 @@ export async function parsePng(data: Uint8Array): Promise<CharxResult> {
       
       if (nullPos < chunkData.length && chunkData[nullPos] === 0) {
         const keyword = new TextDecoder('latin1').decode(chunkData.slice(0, nullPos));
-        const value = new TextDecoder('latin1').decode(chunkData.slice(nullPos + 1));
+        const valueBytes = chunkData.slice(nullPos + 1);
         
         if (keyword === 'chara' || keyword === 'ccv3') {
-          charaData = value;
-          logger.debug('png', `Found '${keyword}' chunk`, { size: value.length });
+          // ccv3가 있으면 우선 사용
+          if (keyword === 'ccv3' || !charaData) {
+            charaData = valueBytes;
+            charaKeyword = keyword;
+            logger.debug('png', `Found '${keyword}' chunk`, { size: valueBytes.length });
+          }
         } else if (keyword.startsWith('chara-ext-asset_')) {
           const assetIndex = keyword.replace('chara-ext-asset_:', '').replace('chara-ext-asset_', '');
-          // Base64 디코딩
-          const binaryStr = atob(value);
-          const assetData = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) {
-            assetData[i] = binaryStr.charCodeAt(i);
+          // tEXt 청크의 값은 Latin1 인코딩된 Base64 문자열
+          const base64Str = new TextDecoder('latin1').decode(valueBytes);
+          try {
+            const assetData = base64ToUint8Array(base64Str);
+            embeddedAssets.set(assetIndex, assetData);
+          } catch (e) {
+            logger.warn('png', `에셋 디코딩 실패: ${assetIndex}`, { error: e });
           }
-          embeddedAssets.set(assetIndex, assetData);
         }
       }
     }
@@ -281,8 +301,13 @@ export async function parsePng(data: Uint8Array): Promise<CharxResult> {
     throw new CharxParseError('Invalid PNG card: no chara/ccv3 tEXt chunk found');
   }
   
-  // Base64 디코딩
-  const jsonStr = atob(charaData);
+  logger.debug('png', `에셋 청크 로드 완료`, { count: embeddedAssets.size });
+  
+  // Base64 디코딩 - Latin1로 읽은 후 atob
+  const base64Str = new TextDecoder('latin1').decode(charaData);
+  const jsonBytes = base64ToUint8Array(base64Str);
+  // UTF-8로 JSON 파싱
+  const jsonStr = new TextDecoder('utf-8').decode(jsonBytes);
   const card = JSON.parse(jsonStr) as CharacterCardV3;
   
   // 에셋 매핑
@@ -292,7 +317,63 @@ export async function parsePng(data: Uint8Array): Promise<CharxResult> {
   // PNG 자체를 에셋으로 저장
   assets.set('card_image.png', data);
   
-  // card.data.assets에서 메타데이터 읽기
+  // 유효한 확장자 목록
+  const validExtensions = new Set([
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg',
+    'mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a',
+    'mp4', 'webm', 'mov', 'avi',
+    'json', 'txt', 'md', 'html', 'css', 'js',
+    'bin', 'dat', 'onnx', 'pth'
+  ]);
+  
+  /**
+   * 에셋 데이터에서 확장자 추정
+   */
+  function guessExtension(assetData: Uint8Array, fallbackExt: string): string {
+    // fallbackExt가 유효한 확장자이면 그대로 사용
+    if (fallbackExt && validExtensions.has(fallbackExt.toLowerCase())) {
+      return fallbackExt.toLowerCase();
+    }
+    
+    // Magic bytes로 확장자 추정
+    if (assetData.length > 4) {
+      // PNG
+      if (assetData[0] === 0x89 && assetData[1] === 0x50 && assetData[2] === 0x4E && assetData[3] === 0x47) {
+        return 'png';
+      }
+      // JPEG
+      if (assetData[0] === 0xFF && assetData[1] === 0xD8 && assetData[2] === 0xFF) {
+        return 'jpg';
+      }
+      // GIF
+      if (assetData[0] === 0x47 && assetData[1] === 0x49 && assetData[2] === 0x46) {
+        return 'gif';
+      }
+      // WebP (RIFF....WEBP)
+      if (assetData[0] === 0x52 && assetData[1] === 0x49 && assetData[2] === 0x46 && assetData[3] === 0x46 &&
+          assetData.length > 11 && assetData[8] === 0x57 && assetData[9] === 0x45 && assetData[10] === 0x42 && assetData[11] === 0x50) {
+        return 'webp';
+      }
+      // MP3 (ID3 or 0xFF 0xFB)
+      if ((assetData[0] === 0x49 && assetData[1] === 0x44 && assetData[2] === 0x33) ||
+          (assetData[0] === 0xFF && (assetData[1] & 0xE0) === 0xE0)) {
+        return 'mp3';
+      }
+      // OGG
+      if (assetData[0] === 0x4F && assetData[1] === 0x67 && assetData[2] === 0x67 && assetData[3] === 0x53) {
+        return 'ogg';
+      }
+      // WAV (RIFF....WAVE)
+      if (assetData[0] === 0x52 && assetData[1] === 0x49 && assetData[2] === 0x46 && assetData[3] === 0x46 &&
+          assetData.length > 11 && assetData[8] === 0x57 && assetData[9] === 0x41 && assetData[10] === 0x56 && assetData[11] === 0x45) {
+        return 'wav';
+      }
+    }
+    
+    return 'bin';  // 알 수 없는 경우 기본값
+  }
+  
+  // V3: card.data.assets에서 메타데이터 읽기
   const assetMeta = (card.data as any)?.assets as Array<{
     type: string;
     uri: string;
@@ -300,7 +381,8 @@ export async function parsePng(data: Uint8Array): Promise<CharxResult> {
     ext: string;
   }> | undefined;
   
-  if (assetMeta) {
+  if (assetMeta && assetMeta.length > 0) {
+    logger.debug('png', 'V3 assets 처리', { count: assetMeta.length });
     for (const meta of assetMeta) {
       if (meta.uri.startsWith('__asset:')) {
         const assetIndex = meta.uri.replace('__asset:', '');
@@ -308,7 +390,7 @@ export async function parsePng(data: Uint8Array): Promise<CharxResult> {
         
         if (assetData) {
           const baseName = meta.name;
-          const ext = meta.ext || 'bin';
+          const ext = guessExtension(assetData, meta.ext);
           const baseKey = baseName.toLowerCase();
           const count = nameCount.get(baseKey) || 0;
           nameCount.set(baseKey, count + 1);
@@ -322,8 +404,72 @@ export async function parsePng(data: Uint8Array): Promise<CharxResult> {
     }
   }
   
+  // V2: data.extensions.risuai.additionalAssets 처리
+  const risuai = (card.data as any)?.extensions?.risuai;
+  if (risuai) {
+    // additionalAssets: [name, uri, fileName?][]
+    const additionalAssets = risuai.additionalAssets as [string, string, string?][] | undefined;
+    if (additionalAssets && additionalAssets.length > 0) {
+      logger.debug('png', 'V2 additionalAssets 처리', { count: additionalAssets.length });
+      for (let i = 0; i < additionalAssets.length; i++) {
+        const asset = additionalAssets[i];
+        const name = asset[0];
+        const uri = asset[1];
+        const fileName = asset[2] || name;
+        
+        if (uri.startsWith('__asset:')) {
+          const assetIndex = uri.replace('__asset:', '');
+          const assetData = embeddedAssets.get(assetIndex);
+          
+          if (assetData) {
+            const ext = guessExtension(assetData, '');
+            
+            const baseKey = name.toLowerCase();
+            const count = nameCount.get(baseKey) || 0;
+            nameCount.set(baseKey, count + 1);
+            
+            const assetName = count === 0 
+              ? `${name}.${ext}` 
+              : `${name}{{${count}}}.${ext}`;
+            assets.set(assetName, assetData);
+          }
+        }
+      }
+    }
+    
+    // emotions: [name, uri][]
+    const emotions = risuai.emotions as [string, string][] | undefined;
+    if (emotions && emotions.length > 0) {
+      logger.debug('png', 'V2 emotions 처리', { count: emotions.length });
+      for (const emotion of emotions) {
+        const name = emotion[0];
+        const uri = emotion[1];
+        
+        if (uri.startsWith('__asset:')) {
+          const assetIndex = uri.replace('__asset:', '');
+          const assetData = embeddedAssets.get(assetIndex);
+          
+          if (assetData) {
+            const ext = guessExtension(assetData, 'png');  // 이모션은 기본 png
+            
+            const baseKey = `emotion_${name}`.toLowerCase();
+            const count = nameCount.get(baseKey) || 0;
+            nameCount.set(baseKey, count + 1);
+            
+            const assetName = count === 0 
+              ? `emotion_${name}.${ext}` 
+              : `emotion_${name}{{${count}}}.${ext}`;
+            assets.set(assetName, assetData);
+          }
+        }
+      }
+    }
+  }
+  
   logger.info('png', '파싱 완료', {
     name: card.data?.name,
+    spec: card.spec,
+    embeddedAssetChunks: embeddedAssets.size,
     assetsCount: assets.size
   });
   

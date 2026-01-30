@@ -8,14 +8,17 @@
 ## 목차
 
 1. [봇 카드 vs AI 이미지 EXIF 혼동](#봇-카드-vs-ai-이미지-exif-혼동) ⭐⭐ CRITICAL
-2. [PNG/JPEG 확장자 처리 누락](#pngjpeg-확장자-처리-누락) ⭐ 
-3. [x_meta 폴더 처리](#x_meta-폴더-처리) ⭐ NEW
-4. [폴더 ID 형식](#폴더-id-형식) ⭐
-5. [에셋 타입 판별](#에셋-타입-판별) ⭐
-6. [에셋 URI 형식](#에셋-uri-형식)
-7. [Svelte 반응성 의존성](#svelte-반응성-의존성)
-8. [RPack WASM 필수](#rpack-wasm-필수)
-9. [프리셋 필드 오타](#프리셋-필드-오타)
+2. [PNG V2 카드 에셋 누락](#png-v2-카드-에셋-누락) ⭐⭐ NEW
+3. [PNG 텍스트 인코딩](#png-텍스트-인코딩) ⭐ NEW
+4. [V3 에셋 확장자 버그](#v3-에셋-확장자-버그) ⭐ NEW
+5. [PNG/JPEG 확장자 처리 누락](#pngjpeg-확장자-처리-누락) ⭐ 
+6. [x_meta 폴더 처리](#x_meta-폴더-처리)
+7. [폴더 ID 형식](#폴더-id-형식) ⭐
+8. [에셋 타입 판별](#에셋-타입-판별) ⭐
+9. [에셋 URI 형식](#에셋-uri-형식)
+10. [Svelte 반응성 의존성](#svelte-반응성-의존성)
+11. [RPack WASM 필수](#rpack-wasm-필수)
+12. [프리셋 필드 오타](#프리셋-필드-오타)
 
 ---
 
@@ -63,6 +66,164 @@ async function showAssetExif(asset: AssetEntry) {
 
 - 봇 카드 파싱: `src/lib/core/formats/charx.ts`, `png.ts`
 - AI EXIF 추출: `src/lib/core/exif/extractor.ts`
+
+---
+
+## PNG V2 카드 에셋 누락
+
+> **테스트**: `tests/schema.test.ts` → `PNG Character Card Schema Validation`
+
+### 문제
+
+PNG 캐릭터 카드에서 **에셋이 1~2개만 파싱**되고 나머지 200개 이상이 누락됨.
+
+### 원인
+
+V2 카드와 V3 카드의 에셋 저장 위치가 다름:
+
+| 버전 | 에셋 메타데이터 위치 | 예시 |
+|------|---------------------|------|
+| V3 | `card.data.assets[]` | `{ type: 'icon', uri: '__asset:0' }` |
+| V2 | `card.data.extensions.risuai.additionalAssets[]` | `['black', '__asset:1', 'black']` |
+
+**기존 코드**는 V3만 처리하고 V2를 무시함.
+
+### 추가 문제
+
+PNG 파일에는 `chara` (V2)와 `ccv3` (V3) 청크가 **동시에 존재**할 수 있음!
+
+```
+PNG 파일 청크:
+├── chara          ← V2 JSON (Base64)
+├── ccv3           ← V3 JSON (Base64) ← 우선 사용!
+├── chara-ext-asset_:0
+├── chara-ext-asset_:1
+└── ...
+```
+
+### 해결책
+
+```typescript
+// 1. ccv3가 있으면 우선 사용
+if (keyword === 'ccv3' || !charaData) {
+  charaData = valueBytes;
+}
+
+// 2. V3 assets 처리
+const assetMeta = card.data.assets;
+if (assetMeta?.length > 0) {
+  for (const meta of assetMeta) {
+    // V3 에셋 처리...
+  }
+}
+
+// 3. V2 additionalAssets 처리 (V3에 없는 경우)
+const risuai = card.data.extensions?.risuai;
+const additionalAssets = risuai?.additionalAssets;
+if (additionalAssets?.length > 0) {
+  for (const [name, uri, fileName] of additionalAssets) {
+    // V2 에셋 처리...
+  }
+}
+```
+
+---
+
+## PNG 텍스트 인코딩
+
+> **테스트**: `tests/schema.test.ts` → `should correctly decode UTF-8 text`
+
+### 문제
+
+PNG 카드의 한글 텍스트가 깨져서 표시됨:
+- `코를 찌르는 것은...` → `ì½â¬ë¡¤ ì°ì¸ë ê²ì...` (깨짐)
+
+### 원인
+
+PNG tEXt 청크는 **Latin1**로 인코딩되지만, 실제 데이터는 **Base64 → UTF-8 JSON**임.
+
+```
+저장 과정:
+UTF-8 JSON → Base64 문자열 → Latin1 바이트로 PNG 청크에 저장
+
+읽기 과정 (올바른 방법):
+Latin1 디코딩 → Base64 디코딩 → UTF-8 JSON 파싱
+```
+
+### 잘못된 코드
+
+```typescript
+// ❌ 잘못된 방법
+const value = new TextDecoder('latin1').decode(chunkData);
+const jsonStr = atob(value);  // Latin1 문자열을 atob에 넣음
+const card = JSON.parse(jsonStr);  // 한글 깨짐!
+```
+
+### 해결책
+
+```typescript
+// ✅ 올바른 방법
+const base64Str = new TextDecoder('latin1').decode(valueBytes);
+
+// atob()는 Latin1 문자열 → 바이너리 변환
+const binaryStr = atob(base64Str);
+const jsonBytes = new Uint8Array(binaryStr.length);
+for (let i = 0; i < binaryStr.length; i++) {
+  jsonBytes[i] = binaryStr.charCodeAt(i);
+}
+
+// 최종 JSON은 UTF-8로 디코딩
+const jsonStr = new TextDecoder('utf-8').decode(jsonBytes);
+const card = JSON.parse(jsonStr);  // 한글 정상!
+```
+
+---
+
+## V3 에셋 확장자 버그
+
+> **테스트**: `tests/schema.test.ts` → `should have assets with proper extension detection`
+
+### 문제
+
+V3 카드의 `asset.ext` 필드에 **잘못된 값**이 저장됨:
+
+```json
+{
+  "type": "x-risu-asset",
+  "name": "fertilization_success",
+  "uri": "__asset:2",
+  "ext": "fertilization_success"  // ❌ 확장자가 아님!
+}
+```
+
+### 원인
+
+RisuAI 내보내기 버그로 추정. `ext` 필드에 에셋 이름이 들어감.
+
+### 해결책
+
+`ext`가 유효한 확장자가 아니면 **magic bytes로 실제 파일 형식 추정**:
+
+```typescript
+const validExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp3', ...]);
+
+function guessExtension(data: Uint8Array, fallbackExt: string): string {
+  // 유효한 확장자면 그대로 사용
+  if (validExts.has(fallbackExt.toLowerCase())) {
+    return fallbackExt.toLowerCase();
+  }
+  
+  // Magic bytes로 추정
+  if (data[0] === 0x89 && data[1] === 0x50) return 'png';
+  if (data[0] === 0xFF && data[1] === 0xD8) return 'jpg';
+  if (data[0] === 0x52 && data[1] === 0x49 && 
+      data[8] === 0x57 && data[9] === 0x45) return 'webp';
+  if (data[0] === 0x47 && data[1] === 0x49) return 'gif';
+  // ...
+  
+  return 'bin';  // 알 수 없으면 기본값
+}
+```
 
 ---
 

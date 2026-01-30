@@ -254,9 +254,74 @@ PNG tEXt 청크에 Base64로 인코딩된 데이터.
 |--------|------|
 | `chara` | CCv2/v3 JSON (Base64) |
 | `ccv3` | CCv3 JSON (우선, Base64) |
-| `chara-ext-asset_{N}` | 에셋 바이너리 (Base64) |
+| `chara-ext-asset_:N` | 에셋 바이너리 (Base64) |
 
-### 7.2 에셋 인덱스 매핑
+> **주의**: 청크 키워드는 `chara-ext-asset_:0` 또는 `chara-ext-asset_0` 두 형태 모두 존재함
+
+### 7.2 V2 vs V3 카드 처리
+
+> **⚠️ 중요**: PNG 파일에는 V2(`chara`)와 V3(`ccv3`) 청크가 **동시에** 존재할 수 있음!
+
+```typescript
+// 우선순위: ccv3 > chara
+if (keyword === 'ccv3' || !charaData) {
+  charaData = valueBytes;
+}
+```
+
+### 7.3 V2 에셋 처리 (additionalAssets)
+
+V2 카드는 에셋을 `data.extensions.risuai.additionalAssets`에 저장:
+
+```typescript
+// V2 additionalAssets 구조
+interface RisuAIExtension {
+  additionalAssets?: [name: string, uri: string, fileName?: string][];
+  emotions?: [name: string, uri: string][];
+}
+```
+
+**V3 vs V2 에셋 위치**:
+| 버전 | 에셋 메타데이터 위치 |
+|------|---------------------|
+| V3 | `card.data.assets[]` |
+| V2 | `card.data.extensions.risuai.additionalAssets[]` |
+
+### 7.4 에셋 확장자 추정
+
+> **⚠️ 주의**: V3 `asset.ext` 필드가 잘못된 값일 수 있음! (RisuAI 버그)
+
+```typescript
+// 예: ext가 "fertilization_success"로 저장된 경우
+{ type: 'x-risu-asset', name: 'fertilization_success', ext: 'fertilization_success' }
+
+// 해결: Magic bytes로 실제 확장자 추정
+function guessExtension(data: Uint8Array, fallbackExt: string): string {
+  const validExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', ...]);
+  if (validExts.has(fallbackExt.toLowerCase())) return fallbackExt;
+  
+  // Magic bytes 확인
+  if (data[0] === 0x89 && data[1] === 0x50) return 'png';
+  if (data[0] === 0xFF && data[1] === 0xD8) return 'jpg';
+  if (data[0] === 0x52 && data[1] === 0x49 && data[8] === 0x57 && data[9] === 0x45) return 'webp';
+  // ...
+  return 'bin';
+}
+```
+
+### 7.5 인코딩 처리
+
+> **⚠️ 중요**: PNG tEXt 청크는 Latin1로 인코딩됨!
+
+```typescript
+// 올바른 디코딩 순서
+const base64Str = new TextDecoder('latin1').decode(valueBytes);
+const jsonBytes = base64ToUint8Array(base64Str);  // atob() 사용
+const jsonStr = new TextDecoder('utf-8').decode(jsonBytes);  // 최종 JSON은 UTF-8
+const card = JSON.parse(jsonStr);
+```
+
+### 7.6 에셋 인덱스 매핑
 
 ```json
 {
@@ -268,7 +333,7 @@ PNG tEXt 청크에 Base64로 인코딩된 데이터.
 }
 ```
 
-→ `chara-ext-asset_0` = happy.png, `chara-ext-asset_1` = sad.webp
+→ `chara-ext-asset_:0` = happy.png, `chara-ext-asset_:1` = sad.webp
 
 ---
 
@@ -286,6 +351,20 @@ describe('Charx Schema Validation', () => {
 
   it('should parse additionalAssets with correct path format');
   // → 에셋 경로 형식 검증
+});
+
+describe('PNG Character Card Schema Validation', () => {
+  it('should parse PNG card successfully');
+  // → V2/V3 PNG 카드 파싱
+
+  it('should normalize V2 cards to V3');
+  // → V2 → V3 정규화 검증
+
+  it('should parse embedded assets from tEXt chunks');
+  // → 에셋 청크 파싱 및 확장자 추정
+
+  it('should correctly decode UTF-8 text (한글 등)');
+  // → 인코딩 문제 검증
 });
 ```
 

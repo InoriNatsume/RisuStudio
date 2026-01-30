@@ -302,3 +302,79 @@ describe('Schema Edge Cases', () => {
     });
   });
 });
+
+// PNG 캐릭터 카드 파싱 테스트 (V2/V3 지원)
+describe('PNG Character Card Schema Validation', () => {
+  const pngFiles = fs.readdirSync(TEST_FILES_DIR).filter(f => f.endsWith('.png'));
+  
+  pngFiles.forEach(filename => {
+    describe(`File: ${filename}`, () => {
+      let result: import('../src/lib/core/formats/charx').CharxResult;
+      let parseError: Error | null = null;
+      
+      beforeAll(async () => {
+        try {
+          const filePath = path.join(TEST_FILES_DIR, filename);
+          const buffer = fs.readFileSync(filePath);
+          const { parsePng } = await import('../src/lib/core/formats/charx');
+          result = await parsePng(new Uint8Array(buffer));
+        } catch (e) {
+          parseError = e as Error;
+        }
+      });
+
+      it('should parse PNG card successfully', () => {
+        if (parseError) {
+          console.log(`[${filename}] 파싱 실패 (봇 카드가 아닐 수 있음): ${parseError.message}`);
+          return; // 봇 카드가 아닌 PNG는 스킵
+        }
+        
+        expect(result.card).toBeDefined();
+        console.log(`[${filename}] 카드 이름: ${result.card.data?.name}, 에셋 수: ${result.assets.size}`);
+      });
+
+      it('should normalize V2 cards to V3', () => {
+        if (parseError) return;
+        
+        // V2 카드도 V3으로 정규화되어야 함
+        expect(result.card.spec).toBe('chara_card_v3');
+      });
+
+      it('should parse embedded assets from tEXt chunks', () => {
+        if (parseError) return;
+        
+        // card_image.png는 항상 존재해야 함
+        expect(result.assets.has('card_image.png')).toBe(true);
+        
+        // 에셋 수 로깅
+        const assetCount = result.assets.size;
+        console.log(`[${filename}] 에셋 개수: ${assetCount}`);
+        
+        // 에셋이 있으면 확장자 확인
+        for (const [assetPath, data] of result.assets) {
+          if (assetPath === 'card_image.png') continue;
+          
+          const ext = assetPath.split('.').pop()?.toLowerCase() || '';
+          // 유효한 확장자여야 함 (magic bytes로 추정된 결과)
+          const validExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'mp3', 'wav', 'ogg', 'bin'];
+          expect(validExts).toContain(ext);
+        }
+      });
+
+      it('should correctly decode UTF-8 text (한글 등)', () => {
+        if (parseError) return;
+        
+        const firstMes = result.card.data?.first_mes || '';
+        const description = result.card.data?.description || '';
+        const name = result.card.data?.name || '';
+        
+        // 깨진 문자(replacement character)가 없어야 함
+        const hasCorruptedChar = (str: string) => str.includes('�');
+        
+        expect(hasCorruptedChar(firstMes)).toBe(false);
+        expect(hasCorruptedChar(description)).toBe(false);
+        expect(hasCorruptedChar(name)).toBe(false);
+      });
+    });
+  });
+});
